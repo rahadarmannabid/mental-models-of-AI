@@ -2,8 +2,9 @@ from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSoc
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse, FileResponse, StreamingResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 import os
+import base64
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -16,8 +17,9 @@ import sys
 import time
 import uuid
 import hashlib
+import hmac
 import json
-import mimetypes 
+import mimetypes
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Any, Callable, Iterator, Tuple, cast, Union
 import firebase_admin
@@ -30,7 +32,7 @@ import traceback
 from enum import Enum
 from admin import router as admin_router
 from instructor import router as instructor_router
-from firebase_utils import fb_dict
+from firebase_utils import fb_dict, get_quiz_cached, get_quiz_id_for_access_code_cached
 from survey_payload_compact import compact_survey_ai_history
 import ai_assist
 import httpx
@@ -226,6 +228,24 @@ def initialize_firebase():
         logger.error(f"Firebase initialization failed: {e}")
         return None
 firebase_db = initialize_firebase()
+
+
+def _widen_firebase_connection_pool(size: int = 64) -> None:
+    """Analytics and deletes read up to 32 Firebase paths in parallel; the SDK's default pool keeps
+    only 10 connections, so the rest were opened and thrown away on every request (slow TLS setup)."""
+    if firebase_db is None:
+        return
+    try:
+        from requests.adapters import HTTPAdapter
+
+        session = firebase_db._client.session  # one shared client per database URL
+        old = session.get_adapter("https://")
+        session.mount("https://", HTTPAdapter(pool_connections=4, pool_maxsize=size, max_retries=old.max_retries))
+    except Exception as e:  # private SDK attribute: keep working with the default pool if it changes
+        logger.warning("Could not widen the Firebase connection pool: %s", e)
+
+
+_widen_firebase_connection_pool()
 
 def get_condition_keys():
     """Get condition keys from environment variables"""
@@ -739,6 +759,22 @@ class SessionLog(BaseModel):
     # Multi-problem quizzes: explicit completion per problem index (str keys) — avoids global status ambiguity
     pre_survey_done_by_problem: Optional[Dict[str, bool]] = None
     post_survey_done_by_problem: Optional[Dict[str, bool]] = None
+    # Submitted pre/post packages per problem index (str keys); *_survey_responses only keeps the latest one
+    pre_survey_responses_by_problem: Optional[Dict[str, Dict[str, Any]]] = None
+    post_survey_responses_by_problem: Optional[Dict[str, Dict[str, Any]]] = None
+
+    @field_validator(
+        "pre_survey_draft_by_problem", "post_survey_draft_by_problem",
+        "pre_survey_done_by_problem", "post_survey_done_by_problem",
+        "pre_survey_responses_by_problem", "post_survey_responses_by_problem",
+        mode="before",
+    )
+    @classmethod
+    def _by_problem_from_firebase_list(cls, v: Any) -> Any:
+        # Firebase RTDB returns maps keyed "0", "1", ... as arrays (with None gaps).
+        if isinstance(v, list):
+            return {str(i): x for i, x in enumerate(v) if x is not None}
+        return v
 
     periodic_survey_count: int = 0
     periodic_surveys: List[Dict[str, Any]] = Field(default_factory=list)
@@ -757,7 +793,7 @@ class SessionLog(BaseModel):
 
 class SurveyResponse(BaseModel):
     question: str
-    response: Union[int, str, float, bool, None]  # Likert int or open-ended text
+    response: Union[int, str, float, bool, List[Any], Dict[str, Any], None]  # Likert int, text, checkbox list, grid/diagram object
 
 class SurveySubmission(BaseModel):
     user_id: str
@@ -782,6 +818,28 @@ _request_sessions: ContextVar[Optional[Dict[str, Tuple["SessionLog", str]]]] = C
 )
 
 
+def _merge_session_fields(loaded: Dict[str, Any], mine: Dict[str, Any], stored: Dict[str, Any]) -> Dict[str, Any]:
+    """Three-way merge of a session another request saved while this one was running.
+
+    Fields this request did not change keep the newer stored value; lists both sides appended to
+    (activity_log, agent_log, …) keep both sets of new items; otherwise this request's value wins.
+    """
+    out = dict(stored)
+    for k, v in mine.items():
+        base = loaded.get(k)
+        if v == base:
+            continue
+        theirs = stored.get(k)
+        if k not in stored or theirs == base:
+            out[k] = v
+        elif (isinstance(v, list) and isinstance(theirs, list) and isinstance(base, list)
+              and v[:len(base)] == base and theirs[:len(base)] == base):
+            out[k] = theirs + v[len(base):]
+        else:
+            out[k] = v
+    return out
+
+
 class ActiveSessionMap:
     """Dict-like SessionLog storage. Use Redis when REDIS_URL is set (Koyeb multi-instance)."""
 
@@ -797,7 +855,10 @@ class ActiveSessionMap:
             try:
                 import redis as redis_lib  # noqa: PLC0415
 
-                self._redis = redis_lib.from_url(url, decode_responses=True)
+                # Timeouts: this client is synchronous, so a stalled connection would otherwise freeze
+                # the whole worker until gunicorn kills it.
+                self._redis = redis_lib.from_url(url, decode_responses=True, socket_connect_timeout=5,
+                                                 socket_timeout=5, health_check_interval=30)
                 self._redis.ping()
                 logger.info("Session store: Redis enabled (safe across multiple workers)")
             except Exception as exc:
@@ -865,9 +926,17 @@ class ActiveSessionMap:
             return
         for k, (sl, loaded) in cache.items():
             current = sl.model_dump_json()
-            if current != loaded:
-                self._redis.setex(self._prefix + k, self._ttl, current)
-                cache[k] = (sl, current)
+            if current == loaded:
+                continue
+            # Another request (e.g. an agent turn finishing, or a parallel activity upload) may have saved
+            # this session since we read it; merge instead of overwriting its changes.
+            stored = self._redis.get(self._prefix + k)
+            if stored is not None and stored != loaded:
+                merged = _merge_session_fields(json.loads(loaded), json.loads(current), json.loads(cast(str, stored)))
+                sl = SessionLog.model_validate(merged)
+                current = sl.model_dump_json()
+            self._redis.setex(self._prefix + k, self._ttl, current)
+            cache[k] = (sl, current)
 
     def __contains__(self, k: str) -> bool:
         if self._redis is None:
@@ -899,6 +968,32 @@ class ActiveSessionMap:
     def __len__(self) -> int:
         return len(list(self.keys()))
 
+    def quiz_session_fields(self, sid_needle: str) -> Iterator[Tuple[str, Dict[str, Any]]]:
+        """(session_id, raw session fields) for sessions whose id contains sid_needle.
+
+        Read-only and much cheaper than items() on Redis: scans only matching keys and fetches
+        them in batches with MGET instead of one GET (and a full SessionLog parse) per session.
+        """
+        if self._redis is None:
+            for k, sl in list(self._local.items()):
+                if sid_needle in k.lower():
+                    yield k, sl.model_dump()
+            return
+        p = self._prefix
+        keys = [k for k in self._redis.scan_iter(match=f"{p}*{sid_needle}*", count=1000)
+                if isinstance(k, str) and k.startswith(p)]
+        for i in range(0, len(keys), 200):
+            chunk = keys[i:i + 200]
+            for full, raw in zip(chunk, cast(List[Optional[str]], self._redis.mget(chunk))):
+                if not raw:
+                    continue
+                try:
+                    data = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(data, dict):
+                    yield full[len(p):], data
+
     def session_store_backend(self) -> str:
         """Return 'redis' or 'memory' for health/metrics."""
         return "redis" if self._redis is not None else "memory"
@@ -924,33 +1019,16 @@ _QUIZ_HEARTBEAT_MIN_INTERVAL_SEC = float(os.getenv("QUIZ_HEARTBEAT_MIN_INTERVAL_
 _heartbeat_rate_limit: Dict[str, float] = {}
 
 
-def _session_belongs_to_quiz_log(log: Any, sid: Any, target_lower: str) -> bool:
-    """Same rules as historical get_active_quiz_session_counts matching."""
-    prefix8 = target_lower[:8] if len(target_lower) >= 8 else target_lower
-    expected_assignment = f"quiz_{prefix8}"
-    session_id_needle = f"_quiz_{prefix8}_"
-    lid = getattr(log, "quiz_id", None)
-    match = lid is not None and str(lid).strip().lower() == target_lower
-    if not match:
-        aid = str(getattr(log, "assignment_id", "") or "").strip().lower()
-        if aid == expected_assignment:
-            match = True
-        elif isinstance(sid, str) and session_id_needle in sid.lower():
-            match = True
-    return match
-
-
 def _memory_quiz_session_map(quiz_id: str) -> Dict[str, int]:
     """session_id -> current_problem_index for this quiz on this server process."""
     target = str(quiz_id).strip().lower()
     if not target:
         return {}
     out: Dict[str, int] = {}
-    for sid, log in active_sessions.items():
-        if not _session_belongs_to_quiz_log(log, sid, target):
-            continue
+    # Quiz session ids always contain "_quiz_{quiz_id[:8]}_" (see /quiz/join), so only those are read.
+    for sid, fields in active_sessions.quiz_session_fields(f"_quiz_{target[:8]}_"):
         try:
-            pi = int(getattr(log, "current_problem_index", 0) or 0)
+            pi = int(fields.get("current_problem_index") or 0)
         except (TypeError, ValueError):
             pi = 0
         out[str(sid)] = pi
@@ -1067,14 +1145,18 @@ def get_active_quiz_session_counts(quiz_id: str) -> Dict[str, Any]:
 
 def forget_active_sessions_for_quiz_user(quiz_id: str, user_id: str) -> int:
     """Drop in-memory SessionLog rows for this user on this quiz (same id scheme as Firebase)."""
-    uid = str(user_id or "").strip()
+    return forget_active_sessions_for_quiz_users(quiz_id, [user_id])
+
+
+def forget_active_sessions_for_quiz_users(quiz_id: str, user_ids: List[str]) -> int:
+    """Drop stored SessionLog rows for these users on this quiz, in one pass over the session keys."""
     q = str(quiz_id or "").strip()
-    if len(q) < 8 or not uid:
+    prefixes = tuple(f"{u}_quiz_{q[:8]}_" for u in (str(x or "").strip() for x in user_ids) if u)
+    if len(q) < 8 or not prefixes:
         return 0
-    prefix = f"{uid}_quiz_{q[:8]}_"
     n = 0
     for sid in list(active_sessions.keys()):
-        if isinstance(sid, str) and sid.startswith(prefix):
+        if isinstance(sid, str) and sid.startswith(prefixes):
             try:
                 del active_sessions[sid]
                 n += 1
@@ -1105,6 +1187,9 @@ from starlette.middleware.sessions import SessionMiddleware
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SESSION_SECRET_KEY", "change-me-in-production"),
+    # Instructors log in with an emailed OTP; keep them signed in for 14 days so they are not
+    # asked for a new code all the time. SESSION_SECRET_KEY must stay the same across restarts.
+    max_age=14 * 24 * 3600,
 )
 
 
@@ -2729,7 +2814,9 @@ async def run_terminal(ws: WebSocket):
         return
     start = {"type": "start", "key": session_id, "language": start.get("language"),
              "files": start.get("files") or [], "entry": start.get("entry"),
-             "compile_only": bool(start.get("compile_only"))}
+             "compile_only": bool(start.get("compile_only")),
+             "action": "pip" if start.get("action") == "pip" else "run",
+             "args": [str(a)[:200] for a in (start.get("args") or [])[:40]]}
 
     if not RUNNER_URL:
         await sandbox.serve_websocket(ws, start)
@@ -2740,7 +2827,8 @@ async def run_terminal(ws: WebSocket):
     try:
         async with ws_connect(
             RUNNER_URL.replace("http", "ws", 1) + "/run",
-            additional_headers={"X-Runner-Token": RUNNER_TOKEN}, open_timeout=10, max_size=2 ** 20,
+            # Room for a picture (display event, up to ~1 MB of base64) in one message.
+            additional_headers={"X-Runner-Token": RUNNER_TOKEN}, open_timeout=10, max_size=2 ** 21,
         ) as upstream:
             await upstream.send(json.dumps(start))
 
@@ -2773,6 +2861,93 @@ async def run_terminal(ws: WebSocket):
         await ws.close()
     except Exception:
         pass
+
+
+_package_cleanups: "set[asyncio.Task]" = set()
+
+
+async def _clear_session_packages(session_id: str) -> None:
+    """Delete packages the student installed with pip (they live only until submission)."""
+    try:
+        if RUNNER_URL:
+            async with httpx.AsyncClient(timeout=30) as client:
+                await client.post(RUNNER_URL + "/packages/clear", json={"key": session_id},
+                                  headers={"X-Runner-Token": RUNNER_TOKEN})
+        else:
+            await asyncio.to_thread(sandbox.clear_packages, session_id)
+    except Exception as e:
+        logger.warning("Could not remove packages for session %s: %s", session_id, e)
+
+
+# ─── PyPI proxy for the code runner ──────────────────────────────────────────
+# The runner has no internet access. pip there uses PIP_INDEX_URL=http://runner:<RUNNER_TOKEN>@<app>/pypi/simple/,
+# so packages come from PyPI through the app, and only the runner (which knows the token) can use it.
+_PYPI_SIMPLE = "https://pypi.org/simple/"
+_PYPI_FILES = "https://files.pythonhosted.org/packages/"
+_PYPI_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,99}$")
+_PYPI_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/+-]{0,400}\.whl(\.metadata)?$")
+_PYPI_MAX_BYTES = 400 * 1024 * 1024
+
+
+def _pypi_authorized(request: Request) -> bool:
+    auth = request.headers.get("authorization", "")
+    if not RUNNER_TOKEN or not auth.lower().startswith("basic "):
+        return False
+    try:
+        password = base64.b64decode(auth[6:]).decode("utf-8").partition(":")[2]
+    except Exception:
+        return False
+    return hmac.compare_digest(password, RUNNER_TOKEN)
+
+
+def _pypi_denied() -> HTTPException:
+    return HTTPException(status_code=401, detail="Unauthorized", headers={"WWW-Authenticate": 'Basic realm="pypi"'})
+
+
+@app.get("/pypi/simple/{name}/")
+async def pypi_simple(name: str, request: Request):
+    if not _pypi_authorized(request):
+        raise _pypi_denied()
+    name = name.lower()
+    if not _PYPI_NAME_RE.match(name):
+        raise HTTPException(status_code=404)
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+        r = await client.get(_PYPI_SIMPLE + name + "/", headers={"Accept": "text/html"})
+    if r.status_code == 404:
+        raise HTTPException(status_code=404)
+    if r.status_code != 200:
+        raise HTTPException(status_code=502, detail="PyPI is unavailable")
+    # File links point at files.pythonhosted.org; send them through /pypi/files/ (same host, same credentials).
+    return HTMLResponse(r.text.replace(_PYPI_FILES, "/pypi/files/"))
+
+
+@app.get("/pypi/files/{path:path}")
+async def pypi_file(path: str, request: Request):
+    if not _pypi_authorized(request):
+        raise _pypi_denied()
+    if ".." in path or not _PYPI_FILE_RE.match(path):
+        raise HTTPException(status_code=404)  # wheels only: the runner never builds source packages
+    client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, read=120.0), follow_redirects=True)
+    # identity: the Content-Length passed on must match the bytes sent (httpx would unzip gzip bodies)
+    upstream = await client.send(client.build_request("GET", _PYPI_FILES + path, headers={"Accept-Encoding": "identity"}),
+                                 stream=True)
+    size = int(upstream.headers.get("content-length") or 0)
+    if upstream.status_code != 200 or size > _PYPI_MAX_BYTES:
+        await upstream.aclose()
+        await client.aclose()
+        raise HTTPException(status_code=404 if upstream.status_code == 404 else 502)
+
+    async def body():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    headers = {"Content-Length": str(size)} if size else {}
+    return StreamingResponse(body(), media_type=upstream.headers.get("content-type", "application/octet-stream"),
+                             headers=headers)
 
 
 # ─── Study conditions: 1 = No AI, 2 = inline code suggestion, 3 = coding agent ───
@@ -2874,6 +3049,12 @@ async def agent_chat(request: AgentChatRequest):
         ),
     )
 
+    def store_turn(sl: SessionLog) -> None:
+        # Interaction number and problem are taken from the stored session, so they stay in order.
+        turn.record["index"] = len(sl.agent_log) + 1
+        turn.record["problem_index"] = int(sl.current_problem_index or 0)
+        sl.agent_log.append(turn.record)
+
     async def events():
         try:
             async for ev in turn.run():
@@ -2881,14 +3062,17 @@ async def agent_chat(request: AgentChatRequest):
         except Exception as e:
             logger.error("Agent turn failed: %s", e)
             turn.record["error"] = str(e)
+            turn.finish("error")
             yield f"data: {json.dumps({'type': 'error', 'message': 'The agent hit an error. Please try again.'})}\n\n"
         finally:
+            turn.finish("stopped")  # no-op if the turn already completed or failed
             try:
-                await asyncio.to_thread(
-                    active_sessions.update_fresh, request.session_id, lambda sl: sl.agent_log.append(turn.record)
-                )
-            except Exception as e:
-                logger.error("Failed to log agent turn for %s: %s", request.session_id, e)
+                # Shielded: when the student presses Stop the stream is cancelled, but the turn is still logged.
+                await asyncio.shield(asyncio.to_thread(active_sessions.update_fresh, request.session_id, store_turn))
+            except BaseException as e:
+                logger.error("Failed to log agent turn for %s: %r", request.session_id, e)
+                if isinstance(e, asyncio.CancelledError):
+                    raise
 
     return StreamingResponse(
         events(), media_type="text/event-stream",
@@ -3184,6 +3368,11 @@ async def submit_code(request: SubmitRequest):
             )
         else:
             submit_msg = "Code submitted successfully! Session ended. Please start a new session to continue."
+
+        if session_id:
+            task = asyncio.create_task(_clear_session_packages(session_id))
+            _package_cleanups.add(task)  # keep a reference until it finishes
+            task.add_done_callback(_package_cleanups.discard)
 
         return SubmitResponse(
             status="success",
@@ -3847,6 +4036,11 @@ class SurveyQuestionData(BaseModel):
     max_length: Optional[int] = None         # For open-ended
     min_length: Optional[int] = None         # For open-ended (minimum character requirement)
     help_text: Optional[str] = None          # Optional help text for any question type
+    diagram: Optional[Dict[str, Any]] = None  # For diagram questions (tools, diagram_type, instructions)
+    allow_other: Optional[bool] = None        # multiple_choice / checkboxes: adds "Other (please specify)"
+    other_label: Optional[str] = None
+    rows: Optional[List[str]] = None          # matrix: one row per item
+    columns: Optional[List[str]] = None       # matrix: shared answer choices
 
 
 class SurveyResponseData(BaseModel):
@@ -3910,7 +4104,7 @@ class SurveyStatusResponse(BaseModel):
 
 
 @app.get("/survey-config/{assignment_key}")
-async def get_survey_config(assignment_key: str, problem_index: int = 0):
+async def get_survey_config(assignment_key: str, problem_index: int = 0, session_id: Optional[str] = None):
     """
     Get pre, post, and periodic survey configuration for an assignment key
     FULLY CASE-INSENSITIVE - works with any case variation
@@ -3921,12 +4115,11 @@ async def get_survey_config(assignment_key: str, problem_index: int = 0):
         if assignment_key.startswith("quiz_") and firebase_db:
             access_code = assignment_key[5:]  # strip "quiz_"
             # Look up access code to get actual quiz UUID
-            access_ref = fb_dict(db.reference(f"quiz_access/{access_code}").get())
-            quiz_data = None
-            if access_ref and access_ref.get("quiz_id"):
-                quiz_data = fb_dict(db.reference(f"quizzes/{access_ref['quiz_id']}").get())
+            access_quiz_id = await asyncio.to_thread(get_quiz_id_for_access_code_cached, access_code)
+            quiz_data = await asyncio.to_thread(get_quiz_cached, access_quiz_id) if access_quiz_id else None
             if quiz_data:
                 quiz_data = normalize_quiz_data(quiz_data)
+                quiz_data = apply_condition_surveys(quiz_data, await _session_condition(session_id))
                 problems = quiz_data.get("problems", [])
                 idx = min(problem_index, len(problems) - 1) if problems else 0
                 problem = problems[idx] if problems else {}
@@ -3940,17 +4133,17 @@ async def get_survey_config(assignment_key: str, problem_index: int = 0):
                     "problem_index": idx,
                     "pre_survey": {
                         "title": "Pre-Study Survey",
-                        "description": "Please answer the following questions before starting.",
+                        "description": "",
                         "estimated_time_minutes": 5,
                         "enabled": pre_enabled,
-                        "questions": problem.get("pre_survey", []) if pre_enabled else [],
+                        "questions": _questions_for_student(problem.get("pre_survey", [])) if pre_enabled else [],
                     },
                     "post_survey": {
                         "title": "Post-Study Survey",
-                        "description": "Thank you for completing the task! Please share your experience.",
+                        "description": "",
                         "estimated_time_minutes": 10,
                         "enabled": post_enabled,
-                        "questions": problem.get("post_survey", []) if post_enabled else [],
+                        "questions": _questions_for_student(problem.get("post_survey", [])) if post_enabled else [],
                     },
                     "periodic_survey": {
                         "enabled": rec_enabled and bool(problem.get("recurrent_survey")),
@@ -3958,7 +4151,7 @@ async def get_survey_config(assignment_key: str, problem_index: int = 0):
                         "start": int(problem.get("recurrent_survey_start", 5)),
                         "title": "Quick Check-in",
                         "description": "Please rate your current experience",
-                        "questions": problem.get("recurrent_survey", []) if rec_enabled else [],
+                        "questions": _questions_for_student(problem.get("recurrent_survey", [])) if rec_enabled else [],
                     },
                 }
             # Fall through to empty config if quiz not found
@@ -4074,6 +4267,184 @@ async def save_survey_draft(body: SurveyDraftIn):
         ),
     )
     return {"ok": True}
+
+
+class DiagramSaveIn(BaseModel):
+    """One saved drawing from a `diagram` survey question (pre / post / recurrent survey)."""
+
+    session_id: str
+    user_id: str
+    context: str  # 'pre' | 'post' | 'recurrent'
+    problem_index: int = 0
+    occurrence: Optional[int] = None  # recurrent survey number
+    question_id: str
+    tool: str  # 'canvas' | 'mermaid' | 'upload' ('boxes' only in answers saved before it merged into canvas)
+    diagram_type: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
+    elements: int = 0
+    saved_at: Optional[str] = None
+    image: Optional[str] = None  # PNG snapshot (or the uploaded JPEG) as a data URL
+    svg: Optional[str] = None  # SVG source (canvas and Mermaid tools)
+
+
+DIAGRAM_MAX_DATA_CHARS = 2_000_000
+DIAGRAM_MAX_IMAGE_CHARS = 4_000_000
+DIAGRAM_MAX_SVG_CHARS = 1_500_000
+# "boxes" stays valid so a page opened before the canvas merge can still save.
+DIAGRAM_TOOLS = ("canvas", "boxes", "mermaid", "upload")
+_DIAGRAM_IMAGE_PREFIXES = {"data:image/png;base64,": "png", "data:image/jpeg;base64,": "jpg"}
+_DIAGRAM_IMAGE_MEDIA = {"png": "image/png", "jpg": "image/jpeg"}
+
+
+def _diagram_key_part(value: Any) -> str:
+    """Make a Firebase-key and filename safe fragment."""
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", str(value)).strip("_")[:80] or "x"
+
+
+def _diagram_dir(session_id: str) -> Path:
+    return Path(os.getenv("SUBMISSIONS_DIR", "submissions")) / "diagrams" / _diagram_key_part(session_id)
+
+
+def _write_diagram_files(
+    out_dir: Path, diagram_id: str, record: Dict[str, Any], img: Optional[bytes], ext: Optional[str]
+) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / f"{diagram_id}.json", "w", encoding="utf-8") as f:
+        json.dump(record, f, indent=2, default=str)
+    for old_ext in _DIAGRAM_IMAGE_MEDIA:
+        if old_ext != ext:
+            (out_dir / f"{diagram_id}.{old_ext}").unlink(missing_ok=True)
+    if img and ext:
+        (out_dir / f"{diagram_id}.{ext}").write_bytes(img)
+
+
+@app.post("/diagram/save")
+async def save_diagram(body: DiagramSaveIn):
+    """Store a diagram answer: JSON + PNG on disk and the full record in Firebase under diagrams/{session_id}."""
+    if body.context not in ("pre", "post", "recurrent"):
+        raise HTTPException(status_code=400, detail="context must be pre, post or recurrent")
+    if body.tool not in DIAGRAM_TOOLS:
+        raise HTTPException(status_code=400, detail="Unknown drawing tool")
+
+    session_log = await ensure_session_log_loaded(body.session_id)
+    if session_log is None:
+        raise HTTPException(status_code=404, detail="Session not found. Please log in again.")
+    if session_log.user_id != body.user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if len(json.dumps(body.data, default=str)) > DIAGRAM_MAX_DATA_CHARS:
+        raise HTTPException(status_code=413, detail="The diagram is too large to save. Try removing some detail.")
+
+    img: Optional[bytes] = None
+    ext: Optional[str] = None
+    image: Optional[str] = None
+    if body.image and len(body.image) <= DIAGRAM_MAX_IMAGE_CHARS:
+        for prefix, kind in _DIAGRAM_IMAGE_PREFIXES.items():
+            if body.image.startswith(prefix):
+                try:
+                    img = base64.b64decode(body.image[len(prefix):], validate=True)
+                    image, ext = body.image, kind
+                except (ValueError, TypeError):
+                    pass
+                break
+    if body.tool == "upload" and img is None:
+        raise HTTPException(status_code=400, detail="The uploaded image could not be read. Try a JPG or PNG.")
+    # For drawings the vector data is the answer; the snapshot is optional.
+    svg = body.svg if body.svg and len(body.svg) <= DIAGRAM_MAX_SVG_CHARS else None
+
+    parts = [body.context, f"p{int(body.problem_index)}"]
+    if body.occurrence is not None:
+        parts.append(f"o{int(body.occurrence)}")
+    parts.append(_diagram_key_part(body.question_id))
+    diagram_id = "_".join(parts)
+
+    record: Dict[str, Any] = {
+        "diagram_id": diagram_id,
+        "session_id": body.session_id,
+        "user_id": body.user_id,
+        "assignment_key": session_log.assignment_id,
+        "quiz_id": session_log.quiz_id,
+        "context": body.context,
+        "problem_index": int(body.problem_index),
+        "occurrence": body.occurrence,
+        "question_id": body.question_id,
+        "tool": body.tool,
+        "diagram_type": body.diagram_type,
+        "elements": int(body.elements),
+        "data": body.data,
+        "svg": svg,
+        "saved_at": body.saved_at,
+        "server_saved_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    record["image_type"] = ext
+    tasks = [asyncio.to_thread(_write_diagram_files, _diagram_dir(body.session_id), diagram_id, record, img, ext)]
+    if firebase_db:
+        fdb = firebase_db
+        fb_record = {**record, "image": image}
+        tasks.append(asyncio.to_thread(
+            lambda: fdb.child("diagrams").child(body.session_id).child(diagram_id).set(fb_record)
+        ))
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    errors = [r for r in results if isinstance(r, Exception)]
+    for err in errors:
+        logger.error("Diagram save failed for %s/%s: %s", body.session_id, diagram_id, err)
+    if len(errors) == len(results):
+        raise HTTPException(status_code=500, detail="Could not store the diagram. Please try again.")
+
+    logger.info("Diagram saved: %s %s (%s, %d elements)", body.session_id, diagram_id, body.tool, body.elements)
+    return {"ok": True, "diagram_id": diagram_id, "saved_at": body.saved_at, "server_saved_at": record["server_saved_at"]}
+
+
+def load_diagram_image(session_id: str, diagram_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[bytes], Optional[str]]:
+    """Return (record metadata, image bytes, media type) for a saved diagram: disk first, then Firebase."""
+    out_dir = _diagram_dir(session_id)
+    meta: Optional[Dict[str, Any]] = None
+    try:
+        meta = json.loads((out_dir / f"{diagram_id}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        meta = None
+    for ext, media in _DIAGRAM_IMAGE_MEDIA.items():
+        path = out_dir / f"{diagram_id}.{ext}"
+        if path.is_file():
+            return meta, path.read_bytes(), media
+
+    # Another server instance may have saved it: fall back to the Firebase copy.
+    if firebase_db:
+        try:
+            stored = firebase_db.child("diagrams").child(session_id).child(diagram_id).get()
+        except Exception as e:
+            logger.warning("Diagram lookup failed for %s/%s: %s", session_id, diagram_id, e)
+            stored = None
+        if isinstance(stored, dict):
+            if meta is None:
+                meta = {k: v for k, v in stored.items() if k not in ("image", "svg", "data")}
+            image = stored.get("image")
+            if isinstance(image, str):
+                for prefix, kind in _DIAGRAM_IMAGE_PREFIXES.items():
+                    if image.startswith(prefix):
+                        try:
+                            return meta, base64.b64decode(image[len(prefix):]), _DIAGRAM_IMAGE_MEDIA[kind]
+                        except (ValueError, TypeError):
+                            break
+    return meta, None, None
+
+
+@app.get("/diagram/file")
+async def get_diagram_file(session_id: str, user_id: str, diagram_id: str):
+    """Return the stored image of a diagram answer (used to show an uploaded image again)."""
+    session_log = await ensure_session_log_loaded(session_id)
+    if session_log is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session_log.user_id != user_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    if _diagram_key_part(diagram_id) != diagram_id:
+        raise HTTPException(status_code=400, detail="Invalid diagram id")
+
+    _meta, data, media = await asyncio.to_thread(load_diagram_image, session_id, diagram_id)
+    if data is not None:
+        return Response(content=data, media_type=media, headers={"Cache-Control": "private, no-cache"})
+    raise HTTPException(status_code=404, detail="Image not found")
 
 
 def _quiz_survey_done_for_problem(session_log: SessionLog, pi: int, kind: str) -> bool:
@@ -4235,9 +4606,10 @@ async def get_survey_status(session_id: str, response: Response, problem_index: 
 
         # Instructor quiz: per-problem survey requirements from Firebase (not surveys/*.json)
         if session_log.quiz_id and firebase_db:
-            quiz_data = fb_dict(db.reference(f"quizzes/{session_log.quiz_id}").get())
+            quiz_data = await asyncio.to_thread(get_quiz_cached, session_log.quiz_id)
             if quiz_data:
                 quiz_data = normalize_quiz_data(quiz_data)
+                quiz_data = apply_condition_surveys(quiz_data, session_log.condition)
                 problems = quiz_data.get("problems", []) or []
                 n = len(problems)
                 pi = int(session_log.current_problem_index or 0)
@@ -4438,7 +4810,12 @@ async def submit_pre_post_survey(request: PrePostSurveySubmission):
                         'scale': q.scale if q.scale else None,
                         'options': q.options if q.options else None,
                         'placeholder': q.placeholder if q.placeholder else None,
-                        'max_length': q.max_length if q.max_length else None
+                        'max_length': q.max_length if q.max_length else None,
+                        'diagram': q.diagram if q.diagram else None,
+                        'help_text': q.help_text or None,
+                        'allow_other': q.allow_other or None,
+                        'rows': q.rows or None,
+                        'columns': q.columns or None,
                     } for q in request.questions
                 ],
                 
@@ -4487,14 +4864,21 @@ async def submit_pre_post_survey(request: PrePostSurveySubmission):
             # Multi-problem quiz: record completion per problem so gates stay correct after advancing
             if session_log.quiz_id:
                 _qk = str(int(session_log.current_problem_index or 0))
+                _pkg = {**survey_package, 'problem_index': int(_qk)}
                 if request.survey_type == "pre":
                     _d = dict(session_log.pre_survey_done_by_problem or {})
                     _d[_qk] = True
                     session_log.pre_survey_done_by_problem = _d
+                    _r = dict(session_log.pre_survey_responses_by_problem or {})
+                    _r[_qk] = _pkg
+                    session_log.pre_survey_responses_by_problem = _r
                 else:
                     _d = dict(session_log.post_survey_done_by_problem or {})
                     _d[_qk] = True
                     session_log.post_survey_done_by_problem = _d
+                    _r = dict(session_log.post_survey_responses_by_problem or {})
+                    _r[_qk] = _pkg
+                    session_log.post_survey_responses_by_problem = _r
 
             # Clear server autosave draft for this problem — full submission is authoritative
             _dpi = str(int(session_log.current_problem_index or 0))
@@ -4976,7 +5360,8 @@ async def save_session_to_firebase(
                 'required_questions': session_log.pre_survey_responses.get('required_questions', 0),
                 'completion_time_seconds': session_log.pre_survey_responses.get('completion_time_seconds'),
                 'questions': session_log.pre_survey_responses.get('questions', []),
-                'responses': session_log.pre_survey_responses.get('responses', [])
+                'responses': session_log.pre_survey_responses.get('responses', []),
+                'by_problem': session_log.pre_survey_responses_by_problem or None,
             }
         post_survey = None
         if session_log.post_survey_responses:
@@ -4991,7 +5376,8 @@ async def save_session_to_firebase(
                 'completion_time_seconds': session_log.post_survey_responses.get('completion_time_seconds'),
                 'questions': session_log.post_survey_responses.get('questions', []),
                 'responses': session_log.post_survey_responses.get('responses', []),
-                'ai_context': session_log.post_survey_responses.get('ai_context', {})
+                'ai_context': session_log.post_survey_responses.get('ai_context', {}),
+                'by_problem': session_log.post_survey_responses_by_problem or None,
             }
         periodic_surveys_data = []
         
@@ -5092,6 +5478,11 @@ async def save_session_to_firebase(
             'logs': logs_data,
             'activity_log': activity_log_data
         }
+        # Condition 3: every agent interaction (prompt, response, timing, edits) and the student's skills
+        if session_log.agent_log:
+            user_data['agent_log'] = session_log.agent_log
+        if session_log.agent_skills:
+            user_data['agent_skills'] = session_log.agent_skills
         
         # Add surveys as separate top-level entries
         if pre_survey:
@@ -5177,6 +5568,26 @@ async def serve_survey(request: Request):
     })
 
 
+@app.get("/static/ui-motion.js")
+async def serve_ui_motion():
+    """Shared animations (confirm dialogs, animated deletes, toasts) for instructor pages and the IDE."""
+    return FileResponse(
+        Path("static") / "ui_motion.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/static/diagram-widget.js")
+async def serve_diagram_widget():
+    """Shared drawing widget for diagram survey questions (survey.html and the IDE's recurrent survey)."""
+    return FileResponse(
+        Path("static") / "diagram_widget.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
 @app.get("/assignment-complete.html", response_class=HTMLResponse)
 async def serve_assignment_complete(request: Request):
     """Shown when the user has already submitted the assignment or finished the quiz."""
@@ -5243,9 +5654,9 @@ async def get_assignment_text(assignment_key: str, problem_index: int = 0):
         if assignment_key.startswith("quiz_") and firebase_db:
             access_code = assignment_key[5:]  # strip "quiz_"
             # Look up access code to get actual quiz UUID
-            access_ref = fb_dict(db.reference(f"quiz_access/{access_code}").get())
-            if access_ref and access_ref.get("quiz_id"):
-                qval = fb_dict(db.reference(f"quizzes/{access_ref['quiz_id']}").get())
+            access_quiz_id = await asyncio.to_thread(get_quiz_id_for_access_code_cached, access_code)
+            if access_quiz_id:
+                qval = await asyncio.to_thread(get_quiz_cached, access_quiz_id)
                 if qval:
                     qval = normalize_quiz_data(qval)
                     import html as html_mod
@@ -5562,6 +5973,43 @@ def _message_page(title: str, detail: str = "", status_code: int = 200) -> HTMLR
 
 # ─── Quiz data helpers ──────────────────────────────────────────────────────
 
+# Answer-key fields an instructor can keep on a survey question; never sent to students.
+_SURVEY_ANSWER_KEY_FIELDS = ("correct_answers", "explanation", "competency")
+
+
+def _post_survey_for_condition(prob: Dict[str, Any], condition: Optional[int]) -> List[Dict[str, Any]]:
+    """A problem's post-survey for one study condition.
+
+    post_survey_mode "per_condition" keeps a list per condition in post_survey_by_condition
+    ({"1": [...], "2": [...], "3": [...]}); otherwise every condition gets post_survey.
+    """
+    if prob.get("post_survey_mode") != "per_condition" or condition is None:
+        return prob.get("post_survey") or []
+    by_cond = prob.get("post_survey_by_condition") or {}
+    if isinstance(by_cond, list):  # Firebase returns {"1","2","3"} keys as an array
+        by_cond = {str(i): v for i, v in enumerate(by_cond) if v is not None}
+    return by_cond.get(str(condition)) or []
+
+
+def apply_condition_surveys(quiz_data: dict, condition: Optional[int]) -> dict:
+    """Replace each problem's post_survey with the list for this session's condition."""
+    if condition is None:
+        return quiz_data
+    for prob in quiz_data.get("problems") or []:
+        if prob.get("post_survey_mode") == "per_condition":
+            prob["post_survey"] = _post_survey_for_condition(prob, condition)
+    return quiz_data
+
+
+def _questions_for_student(questions: Any) -> List[Dict[str, Any]]:
+    """Survey questions without the instructor's answer key."""
+    return [
+        {k: v for k, v in q.items() if k not in _SURVEY_ANSWER_KEY_FIELDS}
+        for q in (questions or [])
+        if isinstance(q, dict)
+    ]
+
+
 def normalize_quiz_data(quiz_data: dict) -> dict:
     """Backward-compat: wrap legacy single-problem/single-condition into list format."""
     if "problems" not in quiz_data and "problem_statement" in quiz_data:
@@ -5621,10 +6069,9 @@ async def student_quiz_entry(request: Request, access_code: str):
     """Landing page for students accessing an instructor-created quiz via share link."""
     quiz_data = None
     if firebase_db:
-        mapping = fb_dict(db.reference(f"quiz_access/{access_code}").get())
-        if mapping:
-            quiz_id = mapping.get("quiz_id")
-            quiz_data = fb_dict(db.reference(f"quizzes/{quiz_id}").get()) if quiz_id else None
+        quiz_id = await asyncio.to_thread(get_quiz_id_for_access_code_cached, access_code)
+        if quiz_id:
+            quiz_data = await asyncio.to_thread(get_quiz_cached, quiz_id)
 
     if not quiz_data:
         return _message_page("Quiz not found", "This link is invalid. Please check it with your instructor.", 404)
@@ -5670,6 +6117,7 @@ def build_quiz_join_response(
     resumed: bool = False,
 ) -> Dict[str, Any]:
     """Shared JSON shape for /quiz/join and resume."""
+    apply_condition_surveys(quiz_data, session_log.condition)
     problems = quiz_data.get("problems", []) or []
     prob = problems[problem_idx] if problem_idx < len(problems) else {}
     problem_description = prob.get("problem_statement", "")
@@ -5789,15 +6237,11 @@ async def student_quiz_join(request: Request):
     if not firebase_db:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    mapping = fb_dict(db.reference(f"quiz_access/{access_code}").get())
-    if not mapping:
-        raise HTTPException(status_code=404, detail="Invalid quiz code")
-
-    quiz_id = mapping.get("quiz_id")
+    quiz_id = await asyncio.to_thread(get_quiz_id_for_access_code_cached, access_code)
     if not quiz_id:
         raise HTTPException(status_code=404, detail="Invalid quiz code")
 
-    quiz_data = fb_dict(db.reference(f"quizzes/{quiz_id}").get())
+    quiz_data = await asyncio.to_thread(get_quiz_cached, quiz_id)
     if not quiz_data:
         raise HTTPException(status_code=404, detail="Quiz not found")
     if not quiz_data.get("published", False):
@@ -5961,10 +6405,11 @@ async def quiz_next_problem(request: Request):
         # Return current problem info without re-advancing
         if not session_log.quiz_id:
             raise HTTPException(status_code=400, detail="No quiz ID in session")
-        quiz_data = fb_dict(db.reference(f"quizzes/{session_log.quiz_id}").get())
+        quiz_data = await asyncio.to_thread(get_quiz_cached, session_log.quiz_id)
         if not quiz_data:
             raise HTTPException(status_code=404, detail="Quiz not found")
         quiz_data = normalize_quiz_data(quiz_data)
+        apply_condition_surveys(quiz_data, session_log.condition)
         problems = quiz_data.get("problems", [])
         if idx >= len(problems):
             return {"status": "complete", "message": "All problems completed"}
@@ -6054,10 +6499,11 @@ async def quiz_next_problem(request: Request):
     if not session_log.quiz_id:
         raise HTTPException(status_code=400, detail="No quiz ID in session")
 
-    quiz_data = fb_dict(db.reference(f"quizzes/{session_log.quiz_id}").get())
+    quiz_data = await asyncio.to_thread(get_quiz_cached, session_log.quiz_id)
     if not quiz_data:
         raise HTTPException(status_code=404, detail="Quiz not found")
     quiz_data = normalize_quiz_data(quiz_data)
+    apply_condition_surveys(quiz_data, session_log.condition)
 
     problems = quiz_data.get("problems", [])
     if idx >= len(problems):

@@ -109,10 +109,15 @@ select.form-input { padding-right: 28px !important; }
     color: #fff !important; font: var(--fs-md)/1.5 var(--ui-font) !important; font-weight: var(--fw-regular) !important;
     padding: 8px 12px !important; animation: ui-pop-in-down var(--dur) var(--ease-out) !important; box-shadow: none !important;
 }
+/* Message colors: red = something failed, amber = needs your attention, green = done, blue = in progress */
+.error-message.is-success { background: #12351f !important; border-color: var(--ui-success) !important; }
+.error-message.is-warning { background: #3d2f0b !important; border-color: var(--ui-warning) !important; }
+.error-message.is-info { background: var(--ui-accent-soft) !important; border-color: var(--ui-accent) !important; }
 .toast-notification {
     background: var(--ui-raised) !important; border: 1px solid var(--ui-border-strong) !important; border-left: 3px solid var(--ui-accent) !important;
     border-radius: var(--radius-lg) !important; box-shadow: var(--shadow-pop) !important; color: var(--ui-text) !important;
 }
+.toast-notification.success { border-left-color: var(--ui-success) !important; }
 .toast-notification.warning { border-left-color: var(--ui-warning) !important; }
 .toast-notification.error { border-left-color: var(--ui-error) !important; }
 .toast-title { font: var(--fw-semibold) var(--fs-md)/1.4 var(--ui-font) !important; color: var(--ui-text-strong) !important; }

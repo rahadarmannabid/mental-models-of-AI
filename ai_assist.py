@@ -8,8 +8,9 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from openai import AsyncOpenAI
@@ -258,7 +259,7 @@ class AgentTurn:
         self.run_code = run_code
         self.record: Dict[str, Any] = {
             "turn_id": uuid.uuid4().hex[:12],
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "mode": self.mode,
             "model": AGENT_MODEL,
             "message": message,
@@ -267,7 +268,12 @@ class AgentTurn:
             "tool_calls": [],
             "edits": [],
             "usage": {},
+            # Filled in as the turn runs (see run() and main.agent_chat):
+            # index, problem_index, ended_at, duration_ms, first_output_ms, status,
+            # lines_added_total, lines_removed_total, files_changed
         }
+        self._t0 = time.monotonic()
+        self._partial_text = ""  # text of the current model step, kept if the student stops mid-answer
 
     # Tool implementations -------------------------------------------------
 
@@ -315,7 +321,7 @@ class AgentTurn:
             if len(self.ws) == 1:
                 return "Cannot delete the only file in the workspace.", None
             before = self.ws.pop(fn)
-            self.record["edits"].append({"filename": fn, "action": "delete", "diff": _short_diff(before, "", fn)})
+            self._log_edit(fn, "delete", before, "")
             return f"Deleted {fn}.", {"type": "file", "action": "delete", "filename": fn}
         if name == "run_code":
             entry = fn or self.active_file
@@ -336,13 +342,38 @@ class AgentTurn:
             return f"Content too long (max {MAX_FILE_CHARS} characters).", None
         before = self.ws.get(fn, "")
         self.ws[fn] = content
-        diff = _short_diff(before, content, fn)
-        self.record["edits"].append({"filename": fn, "action": action, "diff": diff})
-        added = sum(1 for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++"))
-        removed = sum(1 for ln in diff.splitlines() if ln.startswith("-") and not ln.startswith("---"))
+        added, removed = self._log_edit(fn, action, before, content)
         return (f"{'Created' if action == 'create' else 'Updated'} {fn} (+{added} -{removed}).",
                 {"type": "file", "action": action, "filename": fn, "content": content,
                  "added": added, "removed": removed})
+
+    def _log_edit(self, fn: str, action: str, before: str, after: str) -> Tuple[int, int]:
+        """Record one file change: what was added/removed (counted on the full diff) plus a capped diff."""
+        full = list(difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm=""))
+        added = sum(1 for ln in full if ln.startswith("+") and not ln.startswith("+++"))
+        removed = sum(1 for ln in full if ln.startswith("-") and not ln.startswith("---"))
+        self.record["edits"].append({
+            "filename": fn, "action": action,
+            "at_ms": int((time.monotonic() - self._t0) * 1000),
+            "lines_added": added, "lines_removed": removed,
+            "diff": _short_diff(before, after, fn),
+        })
+        return added, removed
+
+    def finish(self, status: str) -> None:
+        """Stamp timing and totals; called once when the turn ends (completed, stopped or error)."""
+        if "status" in self.record:
+            return
+        if status != "completed" and self._partial_text:
+            self.record["response"] += ("\n\n" if self.record["response"] else "") + self._partial_text
+        self.record["status"] = status
+        self.record["ended_at"] = datetime.now(timezone.utc).isoformat()
+        self.record["duration_ms"] = int((time.monotonic() - self._t0) * 1000)
+        self.record["lines_added_total"] = sum(e["lines_added"] for e in self.record["edits"])
+        self.record["lines_removed_total"] = sum(e["lines_removed"] for e in self.record["edits"])
+        self.record["files_changed"] = sorted(
+            n for n in set(self.initial) | set(self.ws) if self.initial.get(n) != self.ws.get(n)
+        )
 
     # Main loop ------------------------------------------------------------
 
@@ -363,8 +394,11 @@ class AgentTurn:
                 messages.append({"role": h["role"], "content": str(h["content"])[:8000]})
         messages.append({"role": "user", "content": _workspace_context(self.ws, self.terminal_output)
                          + "\n\n" + self.message})
+        # Sent first so the client can tie Keep/Undo decisions to this turn.
+        yield {"type": "start", "turn_id": self.record["turn_id"]}
 
         usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        self.record["usage"] = usage  # same dict, so a stopped turn keeps its partial token counts
         for _step in range(AGENT_MAX_STEPS):
             stream = await self.client.chat.completions.create(
                 model=AGENT_MODEL, messages=messages, tools=tools, temperature=0.2,
@@ -379,7 +413,9 @@ class AgentTurn:
                     continue
                 delta = chunk.choices[0].delta
                 if delta.content:
+                    self.record.setdefault("first_output_ms", int((time.monotonic() - self._t0) * 1000))
                     text += delta.content
+                    self._partial_text = text
                     yield {"type": "text", "delta": delta.content}
                 for tc in delta.tool_calls or []:
                     c = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
@@ -387,6 +423,7 @@ class AgentTurn:
                     if tc.function:
                         c["name"] += tc.function.name or ""
                         c["arguments"] += tc.function.arguments or ""
+            self._partial_text = ""
             if text:
                 self.record["response"] += ("\n\n" if self.record["response"] else "") + text
 
@@ -416,7 +453,5 @@ class AgentTurn:
             yield {"type": "text", "delta": note}
 
         self.record["usage"] = usage
-        self.record["files_changed"] = sorted(
-            n for n in set(self.initial) | set(self.ws) if self.initial.get(n) != self.ws.get(n)
-        )
+        self.finish("completed")
         yield {"type": "done", "turn_id": self.record["turn_id"]}

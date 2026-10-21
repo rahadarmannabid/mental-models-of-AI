@@ -1,0 +1,280 @@
+[
+  {
+    "id": "post_ac_open_perception",
+    "question": "How do code completion tools decide when to provide suggestions, and what information do they collect from you?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Perception"
+  },
+  {
+    "id": "post_ac_open_reasoning",
+    "question": "How do you think the tool decides what specific code to suggest, and what factors influence those recommendations?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Reasoning"
+  },
+  {
+    "id": "post_ac_open_learning",
+    "question": "How was the tool's underlying model trained, and what knowledge sources or data does it rely on?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Learning"
+  },
+  {
+    "id": "post_ac_open_limitations",
+    "question": "When has the tool provided an incorrect or irrelevant suggestion, why do you think that happened, and what factors had the greatest impact on the error?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Limitations"
+  },
+  {
+    "id": "post_ac_open_human_role",
+    "question": "How should code suggestions be evaluated and verified?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Human Role"
+  },
+  {
+    "id": "post_ac_understanding",
+    "question": "How well do you understand how the AI programming tools you use work?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Not at all",
+      "Slightly",
+      "Moderately",
+      "Very well",
+      "Extremely well"
+    ],
+    "help_text": ""
+  },
+  {
+    "id": "post_ac_quiz_q1",
+    "question": "During the autocompletion task, what did Copilot use to make its suggestions?",
+    "type": "checkboxes",
+    "required": true,
+    "options": [
+      "Code you had already typed",
+      "Comments in your file",
+      "Function and variable names",
+      "The assignment instructions on the course website",
+      "A request typed into a chat box"
+    ],
+    "help_text": "Select all that apply.",
+    "competency": "15: Sensors",
+    "correct_answers": [
+      "Code you had already typed",
+      "Comments in your file",
+      "Function and variable names"
+    ],
+    "explanation": "Inline completion needs no prompt. The code and comments around your cursor act as the prompt."
+  },
+  {
+    "id": "post_ac_quiz_q2",
+    "question": "Which can Copilot use as context for its next suggestion?",
+    "type": "checkboxes",
+    "required": true,
+    "options": [
+      "Lines above the cursor",
+      "Lines below the cursor",
+      "Other files open in the editor",
+      "Every repository you have ever made",
+      "Your browser history"
+    ],
+    "help_text": "Select all that apply.",
+    "competency": "15: Sensors",
+    "correct_answers": [
+      "Lines above the cursor",
+      "Lines below the cursor",
+      "Other files open in the editor"
+    ],
+    "explanation": "Context is what's near the cursor and open in the editor. It is more than the current line, and less than everything you've written."
+  },
+  {
+    "id": "post_ac_quiz_q3",
+    "question": "You write # return the average of the list above def avg(nums):. Then you change only the comment to # return the median. What happens to the suggestion?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "It changes, because the comment is part of the context",
+      "It stays the same, because Copilot ignores comments",
+      "It stays the same, because Copilot remembers its first suggestion",
+      "Copilot asks which one you meant"
+    ],
+    "help_text": "",
+    "competency": "7: Representations",
+    "correct_answers": [
+      "It changes, because the comment is part of the context"
+    ],
+    "explanation": "Every edit changes the context, and the prediction is recomputed from it."
+  },
+  {
+    "id": "post_ac_quiz_q4",
+    "question": "Copilot suggests a function using your variable ottoCartTotal, a name that exists nowhere on GitHub. What does this show?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "It found an identical function in a stored repository",
+      "Another user wrote this exact code earlier",
+      "It generated new code by predicting it, using names from your file",
+      "It searched Google for a match"
+    ],
+    "help_text": "",
+    "competency": "2: Understanding Intelligence",
+    "correct_answers": [
+      "It generated new code by predicting it, using names from your file"
+    ],
+    "explanation": "Code that doesn't exist anywhere cannot be retrieved. The model builds new text piece by piece."
+  },
+  {
+    "id": "post_ac_quiz_q5",
+    "question": "There are two correct solutions: a common but slower one and a rare but faster one. Which is Copilot more likely to suggest?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "The fastest one, because it optimizes code",
+      "The shortest one",
+      "The one most similar to common patterns in its training data",
+      "The one your professor taught"
+    ],
+    "help_text": "",
+    "competency": "8: Decision-Making",
+    "correct_answers": [
+      "The one most similar to common patterns in its training data"
+    ],
+    "explanation": "Copilot predicts what is likely, not what is optimal."
+  },
+  {
+    "id": "post_ac_quiz_q6",
+    "question": "When did Copilot learn Python coding patterns?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Before release, by training the model on large amounts of public code",
+      "Each time you type, by comparing your code with other users' code",
+      "Engineers wrote rules for every function",
+      "By checking which users' code was correct and saving it"
+    ],
+    "help_text": "",
+    "competency": "9: ML Steps",
+    "correct_answers": [
+      "Before release, by training the model on large amounts of public code"
+    ],
+    "explanation": "Training happens once, ahead of time, on public code. The model does not keep learning while you type."
+  },
+  {
+    "id": "post_ac_quiz_q7",
+    "question": "A Stack Overflow answer posted 10 minutes ago solves your exact problem. Will Copilot suggest that code?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Yes, it searches the web as you type",
+      "Yes, if the answer has many upvotes",
+      "No, it uses patterns learned during training plus your current code",
+      "Only if you paste the link into a comment"
+    ],
+    "help_text": "",
+    "competency": "11: Data Literacy",
+    "correct_answers": [
+      "No, it uses patterns learned during training plus your current code"
+    ],
+    "explanation": "Copilot does not browse the web while you code. Its knowledge comes from training that happened before you used it."
+  },
+  {
+    "id": "post_ac_quiz_q8",
+    "question": "You write a helper fmt_money() in one project. A week later you open a new, empty project. Will Copilot suggest fmt_money() there?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Yes, it saved your code to its memory",
+      "Yes, the model retrained on your code",
+      "No, it only sees the code currently open in your editor",
+      "Yes, if you accepted it many times"
+    ],
+    "help_text": "",
+    "competency": "12: Learning from Data",
+    "correct_answers": [
+      "No, it only sees the code currently open in your editor"
+    ],
+    "explanation": "Your code is temporary context, not permanent memory. The model does not change while you use it."
+  },
+  {
+    "id": "post_ac_quiz_q9",
+    "question": "Copilot suggests a pandas function that was removed in newer versions. Why?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "It copied a broken Stack Overflow post it just found",
+      "Its training data contained a lot of older code that used that function",
+      "It optimizes for the shortest code",
+      "Another user's wrong code was stored and reused"
+    ],
+    "help_text": "",
+    "competency": "13: Critically Interpreting Data",
+    "correct_answers": [
+      "Its training data contained a lot of older code that used that function"
+    ],
+    "explanation": "The model reflects the data it was trained on, including outdated patterns. It does not look anything up live."
+  },
+  {
+    "id": "post_ac_quiz_q10",
+    "question": "Copilot suggests code that crashes when you run it. Why didn't Copilot catch the bug?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "It ran the code but missed the error",
+      "It doesn't run or test code; it predicts code that looks likely",
+      "The server was down",
+      "Another user saved buggy code to its database"
+    ],
+    "help_text": "",
+    "competency": "5: AI's Strengths & Weaknesses",
+    "correct_answers": [
+      "It doesn't run or test code; it predicts code that looks likely"
+    ],
+    "explanation": "Suggestions are never executed, so code that looks right can still fail."
+  },
+  {
+    "id": "post_ac_quiz_q11",
+    "question": "Your code is correct, but your function is named process(x) with no comments, and Copilot suggests unrelated code. What is the most likely cause?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "The server stored wrong code from another user",
+      "The name and code gave too little context to predict your intent",
+      "AI is randomly wrong some of the time",
+      "The system was down"
+    ],
+    "help_text": "",
+    "competency": "10: Human Role in AI",
+    "correct_answers": [
+      "The name and code gave too little context to predict your intent"
+    ],
+    "explanation": "Vague context leads to a vague guess. Clear names and comments are the human's part in getting good suggestions."
+  }
+]

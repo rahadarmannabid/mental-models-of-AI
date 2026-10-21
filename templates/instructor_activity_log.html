@@ -297,6 +297,40 @@
       padding: 20px;
       text-align: center;
     }
+
+    /* Coding agent (C3) and autocomplete (C2) views */
+    .ix-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+    .ix-stat { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 14px; min-width: 120px; }
+    .ix-stat .k { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+    .ix-stat .v { font-size: 1.15rem; font-weight: 700; margin-top: 2px; }
+    .ix-card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; overflow: hidden; }
+    .ix-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; background: var(--panel2); border-bottom: 1px solid var(--border); font-size: 0.78rem; color: var(--muted); }
+    .ix-num { font-weight: 700; color: var(--text); font-size: 0.9rem; }
+    .ix-chip { padding: 2px 8px; border-radius: 10px; font-size: 0.7rem; font-weight: 600; background: rgba(148,163,184,0.12); color: #cbd5e1; }
+    .ix-chip.completed { background: rgba(0,158,115,0.15); color: #4ddfb8; }
+    .ix-chip.stopped { background: rgba(230,159,0,0.15); color: #f0b85c; }
+    .ix-chip.error { background: rgba(213,94,0,0.18); color: #e8845c; }
+    .ix-body { display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px 14px; }
+    @media (min-width: 1000px) { .ix-body { grid-template-columns: 1fr 1fr; } }
+    .ix-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin-bottom: 4px; }
+    .ix-text { white-space: pre-wrap; word-break: break-word; font-size: 0.8rem; line-height: 1.5; color: #e2e8f0; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; max-height: 320px; overflow: auto; }
+    .ix-edits { padding: 0 14px 12px; }
+    .ix-edit { border: 1px solid var(--border); border-radius: 8px; margin-top: 6px; }
+    .ix-edit summary { cursor: pointer; padding: 7px 10px; font-size: 0.78rem; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; list-style: none; }
+    .ix-edit summary::-webkit-details-marker { display: none; }
+    .ix-edit summary::before { content: '▸'; color: #64748b; }
+    .ix-edit[open] summary::before { content: '▾'; }
+    .ix-add { color: #4ddfb8; font-weight: 600; }
+    .ix-del { color: #e8845c; font-weight: 600; }
+    .ix-diff { margin: 0; padding: 8px 0; border-top: 1px solid var(--border); background: #0a0f1c; font: 0.75rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; max-height: 420px; }
+    .ix-diff span { display: block; padding: 0 10px; white-space: pre; }
+    .ix-diff .a { background: rgba(0,158,115,0.14); color: #a7f3d0; }
+    .ix-diff .d { background: rgba(213,94,0,0.14); color: #fdba74; }
+    .ix-diff .h { color: #64748b; }
+    .ix-foot { padding: 0 14px 10px; font-size: 0.72rem; color: #64748b; }
+    .ix-metrics { display: flex; flex-wrap: wrap; gap: 10px 28px; padding: 10px 14px 0; }
+    .ix-metric { font-size: 0.85rem; font-weight: 600; color: #e2e8f0; font-variant-numeric: tabular-nums; }
+    .ix-sub { font-size: 0.72rem; font-weight: 400; color: #64748b; }
   </style>
 </head>
 <body>
@@ -307,7 +341,10 @@
     </div>
     <div class="nav-actions">
       <span style="font-size:0.75rem;color:var(--muted);">{{ instructor_email }}</span>
-      {% if firebase_available %}
+      {% set view = ai_view|default('legacy') %}
+      {% if firebase_available and view in ('agent', 'autocomplete') %}
+      <a class="json-link" href="/instructor/quiz/{{ quiz_id }}/condition-export/{{ view }}?user_id={{ user_id_query }}">Download CSV</a>
+      {% elif firebase_available %}
       <a class="csv-link" href="/instructor/quiz/{{ quiz_id }}/activity-log-export?user_id={{ user_id_query }}">CSV (all problems)</a>
       <a class="json-link" href="/instructor/quiz/{{ quiz_id }}/activity-log-data?user_id={{ user_id_query }}">JSON</a>
       {% endif %}
@@ -321,17 +358,155 @@
       <strong>User:</strong> {{ user_id }}
       {% if condition is not none %} · <strong>Condition:</strong> <span class="condition-badge condition-{{ condition }}">C{{ condition }}</span>{% endif %}
       {% if session_id %} · <strong>Session:</strong> {{ session_id }}{% endif %}
+      {% if view == 'agent' %}
+      <div style="margin-top:8px;font-size:0.75rem;color:#64748b;line-height:1.45;">
+        Coding agent: one card per student message. <strong>Time</strong> is from sending the message to the agent finishing; expand an edit to see its diff.
+      </div>
+      {% elif view == 'autocomplete' %}
+      {% else %}
       <div style="margin-top:8px;font-size:0.75rem;color:#64748b;line-height:1.45;">
         <strong>Suggestion time</strong> is the <code>ai_analysis_trigger</code> time from the activity log when available (same clock as accept/reject).
         <strong>Time to accept or reject</strong> is that trigger → first copilot accept/reject for that suggestion.
       </div>
+      {% endif %}
     </div>
 
     {% if error %}
     <div class="banner warn">{{ error }}</div>
     {% endif %}
 
-    {% if problem_tables and problem_tables|length > 0 %}
+    {% macro plabel(pi) %}{% if pi is not none and problem_labels and pi < problem_labels|length %}{{ problem_labels[pi] }}{% elif pi is not none %}Problem {{ pi + 1 }}{% else %}—{% endif %}{% endmacro %}
+
+    {% if view == 'agent' and agent_rows %}
+    {% set dur = agent_rows|selectattr('duration_seconds')|map(attribute='duration_seconds')|list %}
+    <div class="ix-summary">
+      <div class="ix-stat"><div class="k">Interactions</div><div class="v">{{ agent_rows|length }}</div></div>
+      <div class="ix-stat"><div class="k">Lines added</div><div class="v ix-add">+{{ agent_rows|sum(attribute='lines_added') }}</div></div>
+      <div class="ix-stat"><div class="k">Lines removed</div><div class="v ix-del">−{{ agent_rows|sum(attribute='lines_removed') }}</div></div>
+      <div class="ix-stat"><div class="k">Total agent time</div><div class="v">{{ (dur|sum)|round(1) }} s</div></div>
+      {% set sdur = dur|sort %}
+      <div class="ix-stat"><div class="k">Median generation</div><div class="v">{% if sdur %}{{ sdur[(sdur|length) // 2]|round(1) }} s{% else %}—{% endif %}</div></div>
+      <div class="ix-stat"><div class="k">Edits kept</div><div class="v ix-add">{{ agent_rows|selectattr('edit_verdict', 'equalto', 'kept')|list|length }}</div></div>
+      <div class="ix-stat"><div class="k">Edits undone</div><div class="v ix-del">{{ agent_rows|selectattr('edit_verdict', 'equalto', 'undone')|list|length }}</div></div>
+      <div class="ix-stat"><div class="k">Mixed / not decided</div><div class="v">{{ agent_rows|selectattr('edit_verdict', 'equalto', 'mixed')|list|length }} / {{ agent_rows|selectattr('edit_verdict', 'equalto', 'undecided')|list|length }}</div></div>
+      {% set sttd = agent_rows|selectattr('time_to_decision_seconds', 'ne', none)|map(attribute='time_to_decision_seconds')|sort|list %}
+      <div class="ix-stat"><div class="k">Median time to decide</div><div class="v">{% if sttd %}{{ sttd[(sttd|length) // 2]|round(1) }} s{% else %}—{% endif %}</div></div>
+    </div>
+    {% for r in agent_rows %}
+    <section class="ix-card" id="interaction-{{ r.index }}">
+      <div class="ix-head">
+        <span class="ix-num">#{{ r.index }}</span>
+        <span>{{ plabel(r.problem_index) }}</span>
+        {% if r.status %}<span class="ix-chip {{ r.status }}">{{ r.status|capitalize }}</span>{% endif %}
+        {% if r.mode %}<span class="ix-chip">{{ r.mode|capitalize }} mode</span>{% endif %}
+        <span>{{ r.started_at or '—' }}</span>
+        <span><span class="ix-add">+{{ r.lines_added }}</span> <span class="ix-del">−{{ r.lines_removed }}</span></span>
+        {% if r.skills %}<span>Skills: {{ r.skills|join(', ') }}</span>{% endif %}
+      </div>
+      <div class="ix-metrics">
+        <div><div class="ix-label">Time to generate</div><div class="ix-metric">{% if r.duration_seconds is not none %}{{ r.duration_seconds|round(2) }} s{% if r.first_output_seconds is not none %} <span class="ix-sub">(first output {{ r.first_output_seconds|round(2) }} s)</span>{% endif %}{% else %}—{% endif %}</div></div>
+        <div><div class="ix-label">Student decision on edits</div><div class="ix-metric">
+          {% if r.edit_verdict == 'kept' %}<span class="ix-chip completed">Accepted (Kept)</span>
+          {% elif r.edit_verdict == 'undone' %}<span class="ix-chip error">Rejected (Undone)</span>
+          {% elif r.edit_verdict == 'mixed' %}<span class="ix-chip stopped">Mixed: kept {{ r.kept_files|length }}, undid {{ r.undone_files|length }}</span>
+          {% elif r.edit_verdict == 'undecided' %}<span class="ix-chip">Not decided</span>
+          {% else %}<span class="ix-sub">No code edits</span>{% endif %}
+        </div></div>
+        <div><div class="ix-label">Time to accept / reject</div><div class="ix-metric">{% if r.time_to_decision_seconds is not none %}{{ r.time_to_decision_seconds|round(2) }} s <span class="ix-sub">after the response finished</span>{% else %}—{% endif %}</div></div>
+      </div>
+      <div class="ix-body">
+        <div><div class="ix-label">Student prompt</div><div class="ix-text">{{ r.prompt }}</div></div>
+        <div><div class="ix-label">Agent response</div><div class="ix-text">{{ r.response or '(no text response)' }}</div></div>
+      </div>
+      {% if r.edits %}
+      <div class="ix-edits">
+        <div class="ix-label">Code changes</div>
+        {% for e in r.edits %}
+        <details class="ix-edit">
+          <summary>
+            <strong>{{ {'create': 'Created', 'edit': 'Edited', 'write': 'Rewrote', 'delete': 'Deleted'}.get(e.action, e.action) }}</strong>
+            <code>{{ e.filename }}</code>
+            {% if e.lines_added is defined %}<span class="ix-add">+{{ e.lines_added }}</span> <span class="ix-del">−{{ e.lines_removed }}</span>{% endif %}
+            {% if e.filename in r.kept_files %}<span class="ix-chip completed">Kept</span>{% elif e.filename in r.undone_files %}<span class="ix-chip error">Undone</span>{% endif %}
+          </summary>
+          <pre class="ix-diff">{% for ln in (e.diff or '').split('\n') %}<span class="{% if ln.startswith('+++') or ln.startswith('---') or ln.startswith('@@') %}h{% elif ln.startswith('+') %}a{% elif ln.startswith('-') %}d{% endif %}">{{ ln }}</span>{% endfor %}</pre>
+        </details>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="ix-foot">
+        {% if r.tool_calls %}Tools: {{ r.tool_calls|join(', ') }} · {% endif %}Tokens: {{ r.prompt_tokens + r.completion_tokens }}{% if r.ended_at %} · Ended {{ r.ended_at }}{% endif %}{% if r.error %} · <span class="ix-del">Error: {{ r.error }}</span>{% endif %}
+      </div>
+    </section>
+    {% endfor %}
+
+    {% elif view == 'autocomplete' and suggestion_rows %}
+    {% set accepted = suggestion_rows|selectattr('decision', 'equalto', 'accepted')|list %}
+    {% set rejected = suggestion_rows|selectattr('decision', 'equalto', 'rejected')|list %}
+    {% set ignored = suggestion_rows|selectattr('decision', 'equalto', 'ignored')|list %}
+    {% set lat = suggestion_rows|selectattr('latency_ms')|map(attribute='latency_ms')|sort|list %}
+    {% set tta = accepted|selectattr('time_to_decision_ms')|map(attribute='time_to_decision_ms')|sort|list %}
+    <div class="ix-summary">
+      <div class="ix-stat"><div class="k">Shown</div><div class="v">{{ suggestion_rows|length }}</div></div>
+      <div class="ix-stat"><div class="k">Accepted</div><div class="v ix-add">{{ accepted|length }}</div></div>
+      <div class="ix-stat"><div class="k">Rejected (Esc)</div><div class="v ix-del">{{ rejected|length }}</div></div>
+      <div class="ix-stat"><div class="k">Ignored</div><div class="v">{{ ignored|length }}</div></div>
+      <div class="ix-stat"><div class="k">Acceptance rate</div><div class="v">{{ ((accepted|length) * 100 / (suggestion_rows|length))|round|int }}%</div></div>
+      <div class="ix-stat"><div class="k">Median generation</div><div class="v">{% if lat %}{{ lat[(lat|length) // 2]|int }} ms{% else %}—{% endif %}</div></div>
+      <div class="ix-stat"><div class="k">Median time to accept</div><div class="v">{% if tta %}{{ (tta[(tta|length) // 2] / 1000)|round(1) }} s{% else %}—{% endif %}</div></div>
+    </div>
+    <div class="interaction-timeline-block" aria-label="Autocomplete timeline">
+      <h3>Session timeline</h3>
+      <p style="font-size:0.72rem;color:#64748b;margin:0 0 8px 0;line-height:1.45;">
+        Running count of each event over time since the session's first event. A step up means one more suggestion generated, accepted, rejected or ignored, or one more burst of the student's own typing. Hover a point for details; drag the slider below to zoom.
+      </p>
+      <div class="interaction-timeline-chart" id="autocomplete-timeline" style="height:340px;" role="img" aria-label="Line chart of suggestions generated, accepted, rejected and ignored, and own-code edits over time"></div>
+    </div>
+    <script type="application/json" id="autocomplete-events-json">{{ autocomplete_events|default([]) | tojson | safe }}</script>
+    <div class="log-table-wrap">
+      <table class="log-table">
+        <thead>
+          <tr>
+            <th class="col-idx">#</th>
+            <th class="col-ts">Time shown (UTC)</th>
+            <th>Problem</th>
+            <th class="col-lat">Generation time</th>
+            <th>Decision</th>
+            <th class="col-lat">Time to decide</th>
+            <th>Generated suggestion</th>
+            <th>Code in the IDE</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in suggestion_rows %}
+          <tr>
+            <td class="col-idx">{{ loop.index }}</td>
+            <td class="col-ts">{{ r.shown_at or '—' }}</td>
+            <td>{% if r.problem_index is not none %}<strong>P{{ r.problem_index + 1 }}</strong> · {% endif %}{{ plabel(r.problem_index) }}</td>
+            <td class="col-lat">{% if r.latency_ms is not none %}{{ r.latency_ms|int }} ms{% else %}—{% endif %}</td>
+            <td>
+              {% if r.decision == 'accepted' %}<span class="verdict accepted">Accepted</span>
+              {% elif r.decision == 'rejected' %}<span class="verdict rejected">Rejected (Esc)</span>
+              {% elif r.decision == 'ignored' %}<span class="verdict unknown">Ignored</span>
+              {% else %}<span class="verdict unknown">Not recorded</span>{% endif %}
+            </td>
+            <td class="col-lat">{% if r.time_to_decision_ms is not none %}{{ (r.time_to_decision_ms / 1000)|round(2) }} s{% else %}—{% endif %}</td>
+            <td><pre class="log-pre">{{ r.text }}</pre><div style="color:#64748b;font-size:0.72rem;margin-top:4px;">{{ r.file }}{% if r.line is not none %}:{{ r.line }}{% endif %} · {{ r.lines }} line{{ '' if r.lines == 1 else 's' }}</div></td>
+            <td style="min-width:260px;">
+              {% if r.code_snapshot %}
+              <details class="ix-edit" style="margin-top:0;">
+                <summary>View code ({{ r.code_snapshot.split('\n')|length }} lines, cursor at line {{ r.line }})</summary>
+                <pre class="ix-diff">{% for ln in r.code_snapshot.split('\n') %}<span class="{{ 'a' if loop.index == r.line else '' }}">{{ '%3d'|format(loop.index) }}  {{ ln }}</span>{% endfor %}</pre>
+              </details>
+              {% else %}<span style="color:#64748b">Not recorded</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% elif view == 'legacy' and problem_tables and problem_tables|length > 0 %}
     {% for table in problem_tables %}
     <section class="problem-log-section" aria-labelledby="problem-log-{{ table.problem_index }}">
       <div class="problem-log-head">
@@ -414,7 +589,129 @@
     {% elif not error %}
     <div class="empty-box">No rows to display.</div>
     {% endif %}
+
+    {% if activity_rows %}
+    <details class="ix-card" style="margin-top:16px;">
+      <summary class="ix-head" style="cursor:pointer;list-style:none;">
+        <span class="ix-num">Full activity log</span>
+        <span>{{ activity_rows|length }} events: typing, pastes, code runs, terminal and pip commands, files, tab switches, AI use</span>
+      </summary>
+      <div class="log-table-wrap" style="margin:0;border:0;border-radius:0;">
+        <table class="log-table">
+          <thead><tr><th class="col-idx">#</th><th class="col-ts">Time (UTC)</th><th>Problem</th><th>Event</th><th>Details</th></tr></thead>
+          <tbody>
+            {% for a in activity_rows %}
+            <tr>
+              <td class="col-idx">{{ loop.index }}</td>
+              <td class="col-ts">{{ a.timestamp }}</td>
+              <td>{{ plabel(a.problem_index) }}</td>
+              <td><code>{{ a.activity_type }}</code></td>
+              <td style="color:var(--muted);font-size:0.75rem;word-break:break-word;">{{ a.details }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+    {% endif %}
   </div>
+  <script>
+(function () {
+  var boot = document.getElementById('autocomplete-events-json');
+  var el = document.getElementById('autocomplete-timeline');
+  if (!boot || !el || typeof echarts === 'undefined') return;
+  var events;
+  try { events = JSON.parse(boot.textContent || '[]'); } catch (e) { return; }
+  if (!Array.isArray(events) || !events.length) {
+    el.innerHTML = '<p class="timeline-empty">No timed events recorded for this session.</p>';
+    return;
+  }
+  var SERIES = [
+    { kind: 'generated', name: 'Generated', color: '#38bdf8' },
+    { kind: 'accepted', name: 'Accepted (Tab)', color: '#34d399' },
+    { kind: 'rejected', name: 'Rejected (Esc)', color: '#f87171' },
+    { kind: 'ignored', name: 'Ignored', color: '#94a3b8' },
+    { kind: 'own_code', name: 'Own code (typing)', color: '#a78bfa' }
+  ];
+  var t0 = events[0].t_ms;
+  var tEnd = events[events.length - 1].t_ms - t0;
+  function fmt(ms) {
+    var s = Math.max(0, ms / 1000);
+    if (s < 60) return (s >= 10 ? Math.round(s) : Math.round(s * 10) / 10) + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's';
+    return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+  }
+  function esc(x) {
+    return String(x == null ? '' : x).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+  var series = SERIES.map(function (def) {
+    var n = 0;
+    var data = [[0, 0]];
+    events.forEach(function (ev) {
+      if (ev.kind !== def.kind) return;
+      n += 1;
+      data.push({ value: [ev.t_ms - t0, n], ev: ev });
+    });
+    data.push([tEnd, n]);
+    return {
+      name: def.name + ' (' + n + ')',
+      type: 'line',
+      step: 'end',
+      data: data,
+      color: def.color,
+      symbol: 'circle',
+      symbolSize: function (v, p) { return p.data && p.data.ev ? 6 : 0; },
+      lineStyle: { width: 2 },
+      emphasis: { focus: 'series' }
+    };
+  });
+  var chart = echarts.init(el, null, { renderer: 'canvas' });
+  chart.setOption({
+    backgroundColor: 'transparent',
+    textStyle: { fontFamily: 'Inter, system-ui, sans-serif', fontSize: 11, color: '#e2e8f0' },
+    legend: { top: 0, textStyle: { color: '#cbd5e1', fontSize: 11 }, icon: 'roundRect', itemWidth: 12, itemHeight: 4 },
+    tooltip: {
+      trigger: 'item',
+      confine: true,
+      backgroundColor: 'rgba(15,23,42,0.95)',
+      borderColor: '#1f2937',
+      textStyle: { color: '#e2e8f0', fontSize: 11 },
+      formatter: function (p) {
+        var ev = p.data && p.data.ev;
+        if (!ev) return '';
+        var label = ev.label ? '<pre style="margin:4px 0 0;white-space:pre-wrap;font-size:10px;color:#cbd5e1;">' + esc(ev.label) + '</pre>' : '';
+        var prob = ev.problem_index != null ? ' · P' + (ev.problem_index + 1) : '';
+        return '<div style="max-width:320px;word-break:break-word;"><strong>' + esc(p.seriesName.replace(/ \(\d+\)$/, '')) + ' #' + p.value[1] + '</strong>' + prob +
+          '<br/><span style="color:#94a3b8;font-size:10px;">' + fmt(p.value[0]) + ' into the session</span>' + label + '</div>';
+      }
+    },
+    grid: { left: 48, right: 18, top: 40, bottom: 64 },
+    xAxis: {
+      type: 'value', min: 0, max: tEnd || 1, name: 'Time elapsed', nameLocation: 'middle', nameGap: 26,
+      nameTextStyle: { color: '#94a3b8', fontSize: 11 },
+      axisLine: { lineStyle: { color: '#334155' } },
+      axisLabel: { color: '#94a3b8', fontSize: 10, formatter: fmt },
+      splitLine: { show: false }
+    },
+    yAxis: {
+      type: 'value', name: 'Running count', minInterval: 1,
+      nameTextStyle: { color: '#94a3b8', fontSize: 11 },
+      axisLine: { show: false },
+      axisLabel: { color: '#94a3b8', fontSize: 10 },
+      splitLine: { lineStyle: { color: 'rgba(51,65,85,0.35)' } }
+    },
+    dataZoom: [
+      { type: 'inside', xAxisIndex: 0, filterMode: 'none' },
+      { type: 'slider', xAxisIndex: 0, filterMode: 'none', height: 14, bottom: 4, borderColor: '#1f2937',
+        textStyle: { color: '#64748b', fontSize: 10 }, labelFormatter: function (v) { return fmt(v); } }
+    ],
+    series: series
+  });
+  window.addEventListener('resize', function () { try { chart.resize(); } catch (e) {} });
+})();
+  </script>
   <script type="application/json" id="problem-tables-json">{{ problem_tables | tojson | safe }}</script>
   <script>
 (function () {

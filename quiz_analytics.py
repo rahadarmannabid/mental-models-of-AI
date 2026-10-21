@@ -17,6 +17,7 @@ import json
 import logging
 import math
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -362,9 +363,32 @@ def _final_code_per_problem(meta: Dict[str, Any], num_problems: int) -> List[Opt
     return out
 
 
+_DIAGRAM_TOOL_NAMES = {"canvas": "Canvas", "boxes": "Boxes & arrows", "mermaid": "Mermaid", "upload": "Uploaded image"}
+
+
+def _diagram_answer_display(val: Dict[str, Any]) -> str:
+    """Short text for a diagram answer; Mermaid source is included since it is readable as text."""
+    tool = str(val.get("tool") or "")
+    text = f"[Diagram · {_DIAGRAM_TOOL_NAMES.get(tool, tool)} · {val.get('elements') or 0} elements"
+    if val.get("diagram_id"):
+        text += f" · id {val['diagram_id']}"
+    text += "]"
+    data = val.get("data")
+    if tool == "mermaid" and isinstance(data, dict) and isinstance(data.get("code"), str):
+        text += "\n" + data["code"]
+    return text
+
+
 def _answer_display(val: Any) -> str:
     if val is None:
         return ""
+    if isinstance(val, dict) and val.get("kind") == "diagram":
+        return _diagram_answer_display(val)
+    # Checkbox answers: ["A", "Other: x"]; grid answers: {"row": "column"}
+    if isinstance(val, list) and all(isinstance(x, (str, int, float)) for x in val):
+        return "; ".join(str(x) for x in val)
+    if isinstance(val, dict) and val and all(isinstance(v, (str, int, float)) for v in val.values()):
+        return "; ".join(f"{k}: {v}" for k, v in val.items())
     if isinstance(val, (list, dict)):
         try:
             return json.dumps(val, ensure_ascii=False)
@@ -373,11 +397,46 @@ def _answer_display(val: Any) -> str:
     return str(val)
 
 
-def _qa_from_pre_post_block(block: Any) -> List[Dict[str, str]]:
+def _qa_item(qtext: str, answer: Any) -> Dict[str, Any]:
+    """One Q/A row; diagram answers also carry their id/tool so the UI can show the image."""
+    item: Dict[str, Any] = {"q": qtext, "a": _answer_display(answer)}
+    if isinstance(answer, dict) and answer.get("kind") == "diagram" and answer.get("diagram_id"):
+        item["diagram"] = {"id": str(answer["diagram_id"]), "tool": str(answer.get("tool") or "")}
+    return item
+
+
+def _pre_post_qa(block: Any, total_problems: int = 1) -> List[Dict[str, Any]]:
+    """Q/A pairs for pre or post; multi-problem quizzes keep every problem's answers (labelled P1, P2, ...)."""
+    if not isinstance(block, dict):
+        return []
+    by_problem = block.get("by_problem")
+    if isinstance(by_problem, list):
+        by_problem = {str(i): v for i, v in enumerate(by_problem) if isinstance(v, dict)}
+    if not isinstance(by_problem, dict) or not by_problem:
+        return _qa_from_pre_post_block(block)
+
+    def _key(k: Any) -> int:
+        try:
+            return int(k)
+        except (TypeError, ValueError):
+            return 0
+
+    label = total_problems > 1 or len(by_problem) > 1
+    out: List[Dict[str, Any]] = []
+    for k in sorted(by_problem, key=_key):
+        for item in _qa_from_pre_post_block(by_problem[k]):
+            item["problem"] = _key(k) + 1
+            if label:
+                item["q"] = f"P{_key(k) + 1} · {item['q']}"
+            out.append(item)
+    return out
+
+
+def _qa_from_pre_post_block(block: Any) -> List[Dict[str, Any]]:
     """Build question/answer pairs from Firebase pre_survey or post_survey payload."""
     if not isinstance(block, dict):
         return []
-    out: List[Dict[str, str]] = []
+    out: List[Dict[str, Any]] = []
     qlist = _firebase_to_list(block.get("questions"))
     rlist = _firebase_to_list(block.get("responses"))
     id_to_q: Dict[str, str] = {}
@@ -393,7 +452,7 @@ def _qa_from_pre_post_block(block: Any) -> List[Dict[str, str]]:
         if not qtext:
             qid = str(r.get("question_id") or "")
             qtext = id_to_q.get(qid, "") or "(question)"
-        out.append({"q": qtext, "a": _answer_display(r.get("answer"))})
+        out.append(_qa_item(qtext, r.get("answer")))
     return out
 
 
@@ -422,7 +481,7 @@ def _qa_from_periodic_occurrence(occ: Dict[str, Any]) -> List[Dict[str, str]]:
         resp = r.get("response")
         if resp is None and "answer" in r:
             resp = r.get("answer")
-        out.append({"q": qtext, "a": _answer_display(resp)})
+        out.append(_qa_item(qtext, resp))
     return out
 
 
@@ -433,8 +492,13 @@ def _summarize_survey_payload(user_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     pre = user_data.get("pre_survey")
     post = user_data.get("post_survey")
-    pre_qa = _qa_from_pre_post_block(pre) if pre else []
-    post_qa = _qa_from_pre_post_block(post) if post else []
+    meta = user_data.get("session_metadata") if isinstance(user_data.get("session_metadata"), dict) else {}
+    try:
+        total_problems = int(meta.get("total_problems") or 1)
+    except (TypeError, ValueError):
+        total_problems = 1
+    pre_qa = _pre_post_qa(pre, total_problems) if pre else []
+    post_qa = _pre_post_qa(post, total_problems) if post else []
 
     periodic_rows: List[Dict[str, Any]] = []
     for occ in _periodic_occurrence_dicts(user_data):
@@ -1642,6 +1706,10 @@ def aggregate_quiz_analytics(
         "boxplot": boxplot,
         "summary_by_condition": summary_by_condition,
         "boxplot_by_condition": boxplot_by_condition,
+        "autocomplete": build_autocomplete_panel(
+            [(d, ud) for d, ud in zip(derived, raw_matched) if _session_condition_int(ud) == CONDITION_AUTOCOMPLETE], n),
+        "agent": build_agent_panel(
+            [(d, ud) for d, ud in zip(derived, raw_matched) if _session_condition_int(ud) == CONDITION_AGENT], n),
     }
     return sanitize_for_json(payload)  # type: ignore[return-value]
 
@@ -1703,14 +1771,24 @@ def _checkpoint_session_to_user_data(checkpoint: Dict[str, Any]) -> Optional[Dic
         "activity_log": activity_log_data,
         "_from_checkpoint": True,
     }
+    if isinstance(sess.get("agent_log"), list) and sess["agent_log"]:
+        user_data["agent_log"] = sess["agent_log"]
+    if isinstance(sess.get("agent_skills"), list) and sess["agent_skills"]:
+        user_data["agent_skills"] = sess["agent_skills"]
 
-    if sess.get("pre_survey_responses") and isinstance(sess["pre_survey_responses"], dict):
-        user_data["pre_survey"] = {
-            "status": sess.get("pre_survey_status", "not_started"),
-            "timestamp": sess.get("pre_survey_timestamp"),
-            "completed": sess.get("pre_survey_status") in ("completed", "COMPLETED"),
-            "questions": sess["pre_survey_responses"].get("questions", []),
-            "responses": sess["pre_survey_responses"].get("responses", []),
+    for kind in ("pre", "post"):
+        latest = sess.get(f"{kind}_survey_responses")
+        by_problem = sess.get(f"{kind}_survey_responses_by_problem")
+        if not isinstance(latest, dict) and not by_problem:
+            continue
+        latest = latest if isinstance(latest, dict) else {}
+        user_data[f"{kind}_survey"] = {
+            "status": sess.get(f"{kind}_survey_status", "not_started"),
+            "timestamp": sess.get(f"{kind}_survey_timestamp"),
+            "completed": sess.get(f"{kind}_survey_status") in ("completed", "COMPLETED"),
+            "questions": latest.get("questions", []),
+            "responses": latest.get("responses", []),
+            "by_problem": by_problem or None,
         }
 
     if sess.get("periodic_surveys") and isinstance(sess["periodic_surveys"], list):
@@ -1723,6 +1801,9 @@ def _checkpoint_session_to_user_data(checkpoint: Dict[str, Any]) -> Optional[Dic
             user_data["periodic_surveys"] = {"metadata": {}, "occurrences": occs}
 
     return user_data
+
+
+_MIRROR_FETCH_WORKERS = 32
 
 
 def collect_quiz_sessions_from_firebase(db, quiz_id: str) -> List[Dict[str, Any]]:
@@ -1759,22 +1840,29 @@ def collect_quiz_sessions_from_firebase(db, quiz_id: str) -> List[Dict[str, Any]
     # Mirror path (same payload as save_session_to_firebase writes under sessions/{id}/final_submit)
     needle = f"_quiz_{quiz_id[:8]}_"
     checkpoint_candidates: List[Dict[str, Any]] = []
+    def _fetch_mirror(sid: str) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        """(final user_data, checkpoint) for one session; checkpoint only when no final_submit."""
+        final = db.reference(f"sessions/{sid}/final_submit").get()
+        if isinstance(final, dict):
+            ud = final.get("user_data")
+            return (ud if isinstance(ud, dict) else None), None
+        # No final_submit — try checkpoint (incomplete session)
+        cp = db.reference(f"sessions/{sid}/checkpoint").get()
+        return None, (cp if isinstance(cp, dict) else None)
+
     try:
         sessions_root = db.reference("sessions")
         shallow = sessions_root.get(shallow=True)
         if isinstance(shallow, dict):
-            for sid in shallow.keys():
-                if not isinstance(sid, str) or needle not in sid:
-                    continue
-                final = db.reference(f"sessions/{sid}/final_submit").get()
-                if isinstance(final, dict):
-                    ud = final.get("user_data")
-                    if isinstance(ud, dict):
+            # Sessions already loaded from condition_* would be dropped as duplicates; skip fetching them.
+            sids = [sid for sid in shallow.keys()
+                    if isinstance(sid, str) and needle in sid and sid not in seen_ids]
+            # One Firebase round trip per session: fetch in parallel (order of results is kept).
+            with ThreadPoolExecutor(max_workers=_MIRROR_FETCH_WORKERS) as pool:
+                for ud, cp in pool.map(_fetch_mirror, sids):
+                    if ud is not None:
                         _append_payload(ud)
-                else:
-                    # No final_submit — try checkpoint (incomplete session)
-                    cp = db.reference(f"sessions/{sid}/checkpoint").get()
-                    if isinstance(cp, dict):
+                    elif cp is not None:
                         checkpoint_candidates.append(cp)
     except Exception as e:
         logger.warning("sessions mirror scan failed: %s", e)
@@ -1819,62 +1907,79 @@ def _session_final_submit_matches_user_quiz(
 
 
 def delete_user_data_for_quiz(db, quiz_id: str, user_id: str) -> Dict[str, Any]:
-    """Delete Firebase session payloads for one user on this quiz so analytics re-aggregate excludes them.
+    """Delete Firebase session payloads for one user on this quiz (see delete_users_data_for_quiz)."""
+    return delete_users_data_for_quiz(db, quiz_id, [user_id])
 
-    Removes:
+
+def delete_users_data_for_quiz(db, quiz_id: str, user_ids: List[str]) -> Dict[str, Any]:
+    """Delete Firebase session payloads for these users on this quiz so analytics re-aggregate excludes them.
+
+    Removes, for each user:
     - ``condition_{1,2,3}/quiz_{quiz_id[:8]}/{user_id}`` (always attempted; RTDB delete is idempotent)
     - ``sessions/{session_id}`` when session id matches ``{user_id}_quiz_{quiz_id[:8]}_*``, or when
       ``sessions/.../final_submit`` mirrors this user + quiz (covers legacy / odd session ids)
+    One scan of ``sessions`` serves all users; reads and deletes run in parallel.
     """
-    uid = validate_analytics_user_id(user_id)
+    uids = list(dict.fromkeys(validate_analytics_user_id(u) for u in user_ids))
     q = str(quiz_id or "").strip()
     if len(q) < 8:
         raise ValueError("Invalid quiz id")
+    if not uids:
+        return {"deleted_paths": [], "deleted_count": 0, "by_user": {}}
     prefix = f"quiz_{q[:8]}"
-    deleted_paths: List[str] = []
-
-    for cond in (1, 2, 3):
-        path = f"condition_{cond}/{prefix}/{uid}"
-        ref = db.reference(path)
-        try:
-            ref.delete()
-            deleted_paths.append(path)
-        except Exception as e:
-            logger.warning("delete_user_data_for_quiz: delete %s failed: %s", path, e)
-
     needle = f"_quiz_{q[:8]}_"
-    pattern_prefix = f"{uid}_quiz_{q[:8]}_"
+    prefixes = {f"{u}_quiz_{q[:8]}_": u for u in uids}
+
+    def owner_by_id(sid: str) -> Optional[str]:
+        for pre, u in prefixes.items():
+            if sid.startswith(pre):
+                return u
+        return None
+
+    def owner_by_metadata(sid: str) -> Optional[str]:
+        """For session ids without a user prefix: check only the (small) metadata of the final submit."""
+        try:
+            meta = db.reference(f"sessions/{sid}/final_submit/user_data/session_metadata").get()
+        except Exception as e:
+            logger.warning("delete_users_data_for_quiz: read sessions/%s metadata failed: %s", sid, e)
+            return None
+        if not isinstance(meta, dict):
+            return None
+        u = str(meta.get("user_id") or "")
+        if u in prefixes.values() and _session_final_submit_matches_user_quiz({"user_data": {"session_metadata": meta}}, u, q):
+            return u
+        return None
+
+    def delete(path: str) -> Optional[str]:
+        try:
+            db.reference(path).delete()
+            return path
+        except Exception as e:
+            logger.warning("delete_users_data_for_quiz: delete %s failed: %s", path, e)
+            return None
+
+    targets: List[Tuple[str, str]] = [(f"condition_{c}/{prefix}/{u}", u) for u in uids for c in (1, 2, 3)]
     try:
-        sessions_root = db.reference("sessions")
-        shallow = sessions_root.get(shallow=True)
-        if isinstance(shallow, dict):
-            for sid in list(shallow.keys()):
-                if not isinstance(sid, str) or needle not in sid:
-                    continue
-                p = f"sessions/{sid}"
-                if sid.startswith(pattern_prefix):
-                    try:
-                        db.reference(p).delete()
-                        deleted_paths.append(p)
-                    except Exception as e:
-                        logger.warning("delete_user_data_for_quiz: delete %s failed: %s", p, e)
-                    continue
-                try:
-                    final = db.reference(f"{p}/final_submit").get()
-                except Exception as e:
-                    logger.warning("delete_user_data_for_quiz: read %s/final_submit failed: %s", p, e)
-                    continue
-                if isinstance(final, dict) and _session_final_submit_matches_user_quiz(final, uid, q):
-                    try:
-                        db.reference(p).delete()
-                        deleted_paths.append(p)
-                    except Exception as e:
-                        logger.warning("delete_user_data_for_quiz: delete %s failed: %s", p, e)
+        shallow = db.reference("sessions").get(shallow=True)
+        sids = [sid for sid in (shallow or {}) if isinstance(sid, str) and needle in sid] if isinstance(shallow, dict) else []
+        with ThreadPoolExecutor(max_workers=_MIRROR_FETCH_WORKERS) as pool:
+            unknown = [sid for sid in sids if owner_by_id(sid) is None]
+            owners = dict(zip(unknown, pool.map(owner_by_metadata, unknown)))
+            for sid in sids:
+                u = owner_by_id(sid) or owners.get(sid)
+                if u:
+                    targets.append((f"sessions/{sid}", u))
+            done = list(pool.map(delete, [path for path, _ in targets]))
     except Exception:
-        logger.exception("delete_user_data_for_quiz: sessions scan failed")
+        logger.exception("delete_users_data_for_quiz: sessions scan failed")
         raise
 
-    return {"deleted_paths": deleted_paths, "deleted_count": len(deleted_paths)}
+    deleted_paths = [p for p in done if p]
+    by_user: Dict[str, int] = {u: 0 for u in uids}
+    for (path, u), ok in zip(targets, done):
+        if ok and path.startswith("sessions/"):
+            by_user[u] += 1
+    return {"deleted_paths": deleted_paths, "deleted_count": len(deleted_paths), "sessions_deleted_by_user": by_user}
 
 
 SurveySlot = Tuple[str, Optional[int], int]  # (pre|post|periodic, occurrence or None, qa_index)
@@ -2242,3 +2347,431 @@ def export_activity_log_csv(
                 )
 
     return buf.getvalue()
+
+
+# ─── Condition-specific panels: autocomplete (condition 2) and coding agent (condition 3) ──────
+
+CONDITION_AUTOCOMPLETE = 2
+CONDITION_AGENT = 3
+
+
+def _session_condition_int(user_data: Dict[str, Any]) -> Optional[int]:
+    return _int_pi(_session_meta(user_data).get("condition"))
+
+
+def autocomplete_suggestion_rows(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One row per inline suggestion shown, with what happened to it.
+
+    decision: "accepted" (Tab), "rejected" (Esc), "ignored" (kept typing until it disappeared),
+    or "unknown" (sessions logged before dismissals were recorded, or the page closed first).
+    """
+    rows: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for e in _sorted_activity_entries_chrono(user_data):
+        at = _entry_activity_type(e)
+        if at not in ("inline_suggestion_shown", "inline_suggestion_accepted", "inline_suggestion_dismissed"):
+            continue
+        _ad = e.get("activity_details")
+        ad: Dict[str, Any] = _ad if isinstance(_ad, dict) else {}
+        sid = str(ad.get("suggestion_id") or "") or f"_{len(order)}"
+        row = rows.get(sid)
+        if row is None:
+            row = {
+                "suggestion_id": sid,
+                "problem_index": _problem_index_from_entry(e),
+                "shown_at": None,
+                "decision": "unknown",
+                "decided_at": None,
+                "time_to_decision_ms": None,
+                "accepted": False,
+                "accepted_at": None,
+                "file": ad.get("file") or "",
+                "line": ad.get("line"),
+                "column": ad.get("column"),
+                "lines": _safe_int_metric(ad.get("lines")),
+                "latency_ms": _safe_float(ad.get("latency_ms")),
+                "text": str(ad.get("text") or ""),
+                "code_snapshot": "",
+            }
+            rows[sid] = row
+            order.append(sid)
+        if at == "inline_suggestion_shown":
+            row["shown_at"] = row["shown_at"] or e.get("timestamp")
+            row["code_snapshot"] = row["code_snapshot"] or str(ad.get("code_snapshot") or "")
+            continue
+        # Accepted wins over an earlier dismissal (a cached suggestion can come back and be taken).
+        if at == "inline_suggestion_accepted" or row["decision"] in ("unknown",):
+            row["decision"] = "accepted" if at == "inline_suggestion_accepted" else str(ad.get("decision") or "ignored")
+            row["decided_at"] = e.get("timestamp")
+            row["time_to_decision_ms"] = _safe_float(ad.get("time_to_decision_ms"))
+            if row["time_to_decision_ms"] is None:
+                a, b = _parse_iso(row["shown_at"]), _parse_iso(e.get("timestamp"))
+                if a and b:
+                    row["time_to_decision_ms"] = max(0.0, (b - a).total_seconds() * 1000)
+        if at == "inline_suggestion_accepted":
+            row["accepted"] = True
+            row["accepted_at"] = row["accepted_at"] or e.get("timestamp")
+    return [rows[k] for k in order]
+
+
+def autocomplete_timeline_events(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Time-ordered events for the autocomplete line chart: suggestions shown / accepted / rejected / ignored,
+    plus the student's own editing bursts (code_editing_* entries, timed at the burst start)."""
+    out: List[Dict[str, Any]] = []
+    for e in _sorted_activity_entries_chrono(user_data):
+        at = _entry_activity_type(e)
+        _ad = e.get("activity_details")
+        ad: Dict[str, Any] = _ad if isinstance(_ad, dict) else {}
+        ts = e.get("timestamp")
+        if at == "inline_suggestion_shown":
+            kind = "generated"
+        elif at == "inline_suggestion_accepted":
+            kind = "accepted"
+        elif at == "inline_suggestion_dismissed":
+            kind = "rejected" if str(ad.get("decision") or "") == "rejected" else "ignored"
+        elif at.startswith("code_editing"):
+            kind = "own_code"
+            ts = ad.get("start_time") or ts
+        else:
+            continue
+        t = _utc_for_delta(_parse_iso(ts))
+        if t is None:
+            continue
+        if kind == "own_code":
+            verb = at.replace("code_editing_", "")
+            n = ad.get("characters_added") or ad.get("characters_removed") or ad.get("characters_changed")
+            label = f"{verb} ({n} chars)" if n else verb
+        else:
+            label = str(ad.get("text") or "")[:160]
+        out.append({
+            "t_ms": int(t.timestamp() * 1000),
+            "kind": kind,
+            "problem_index": _problem_index_from_entry(e),
+            "label": label,
+        })
+    out.sort(key=lambda x: x["t_ms"])
+    return out
+
+
+def agent_interaction_rows(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One row per agent interaction (student message), joined with the Keep/Undo decisions on its edits."""
+    decisions: Dict[str, List[Dict[str, Any]]] = {}
+    for e in _sorted_activity_entries_chrono(user_data):
+        if _entry_activity_type(e) != "agent_edit_decision":
+            continue
+        _ad = e.get("activity_details")
+        ad: Dict[str, Any] = _ad if isinstance(_ad, dict) else {}
+        tid = str(ad.get("turn_id") or "")
+        if tid:
+            decisions.setdefault(tid, []).append({
+                "filename": str(ad.get("filename") or ""),
+                "decision": str(ad.get("decision") or ""),
+                "decided_at": e.get("timestamp") or "",
+                "time_to_decision_ms": _safe_float(ad.get("time_to_decision_ms")),
+            })
+
+    out: List[Dict[str, Any]] = []
+    for i, rec in enumerate(_firebase_to_list(user_data.get("agent_log")), 1):
+        if not isinstance(rec, dict):
+            continue
+        edits = [x for x in _firebase_to_list(rec.get("edits")) if isinstance(x, dict)]
+        added = rec.get("lines_added_total")
+        removed = rec.get("lines_removed_total")
+        if added is None:  # turns logged before line counts were recorded: count from the diffs
+            added = sum(1 for x in edits for ln in str(x.get("diff") or "").splitlines()
+                        if ln.startswith("+") and not ln.startswith("+++"))
+            removed = sum(1 for x in edits for ln in str(x.get("diff") or "").splitlines()
+                          if ln.startswith("-") and not ln.startswith("---"))
+        _u = rec.get("usage")
+        usage: Dict[str, Any] = _u if isinstance(_u, dict) else {}
+        decs = decisions.get(str(rec.get("turn_id") or ""), [])
+        kept = [x["filename"] for x in decs if x["decision"] == "keep"]
+        undone = [x["filename"] for x in decs if x["decision"] == "undo"]
+        if not edits:
+            verdict = "no_edits"
+        elif not decs:
+            verdict = "undecided"
+        elif kept and undone:
+            verdict = "mixed"
+        else:
+            verdict = "kept" if kept else "undone"
+        # Response finished → first Keep/Undo click. Older logs lack the client-side value: fall back to timestamps.
+        ttd: Optional[float] = None
+        if decs:
+            ttd = decs[0]["time_to_decision_ms"]
+            if ttd is None:
+                a, b = _utc_for_delta(_parse_iso(rec.get("ended_at"))), _utc_for_delta(_parse_iso(decs[0]["decided_at"]))
+                if a and b:
+                    ttd = max(0.0, (b - a).total_seconds() * 1000)
+        dur = _safe_float(rec.get("duration_ms"))
+        first = _safe_float(rec.get("first_output_ms"))
+        out.append({
+            "index": _int_pi(rec.get("index")) or i,
+            "turn_id": rec.get("turn_id") or "",
+            "problem_index": _int_pi(rec.get("problem_index")),
+            "started_at": rec.get("timestamp") or "",
+            "ended_at": rec.get("ended_at") or "",
+            "duration_seconds": dur / 1000.0 if dur is not None else None,
+            "first_output_seconds": first / 1000.0 if first is not None else None,
+            "status": rec.get("status") or ("error" if rec.get("error") else ""),
+            "mode": rec.get("mode") or "",
+            "model": rec.get("model") or "",
+            "skills": [str(s) for s in _firebase_to_list(rec.get("skills"))],
+            "prompt": rec.get("message") or "",
+            "response": rec.get("response") or "",
+            "files_changed": [str(f) for f in _firebase_to_list(rec.get("files_changed"))],
+            "edits": edits,
+            "lines_added": _safe_int_metric(added),
+            "lines_removed": _safe_int_metric(removed),
+            "tool_calls": [x.get("name") for x in _firebase_to_list(rec.get("tool_calls")) if isinstance(x, dict)],
+            "kept_files": kept,
+            "undone_files": undone,
+            "edit_verdict": verdict,
+            "decided_at": decs[0]["decided_at"] if decs else "",
+            "time_to_decision_seconds": ttd / 1000.0 if ttd is not None else None,
+            "prompt_tokens": _safe_int_metric(usage.get("prompt_tokens")),
+            "completion_tokens": _safe_int_metric(usage.get("completion_tokens")),
+            "error": rec.get("error") or "",
+        })
+    return out
+
+
+def _round_or_none(x: Optional[float], nd: int = 2) -> Optional[float]:
+    return round(x, nd) if x is not None else None
+
+
+def _per_problem(rows: List[Dict[str, Any]], n: int, value) -> List[float]:
+    out = [0.0] * n
+    for r in rows:
+        pi = r.get("problem_index")
+        if pi is None and n == 1:
+            pi = 0
+        if isinstance(pi, int) and 0 <= pi < n:
+            out[pi] += value(r)
+    return out
+
+
+def build_autocomplete_panel(sessions: List[Tuple[Dict[str, Any], Dict[str, Any]]], n: int) -> Dict[str, Any]:
+    """sessions: (derived metrics, raw user_data) for condition-2 sessions."""
+    per_student: List[Dict[str, Any]] = []
+    all_rows: List[Dict[str, Any]] = []
+    for d, ud in sessions:
+        rows = autocomplete_suggestion_rows(ud)
+        all_rows.extend(rows)
+        shown = len(rows)
+        acc = sum(1 for r in rows if r["accepted"])
+        lat = [r["latency_ms"] for r in rows if r["latency_ms"] is not None]
+        per_student.append({
+            "user_id": d.get("user_id") or "",
+            "session_id": d.get("session_id") or "",
+            "completed": bool(d.get("completed_assignment")),
+            "shown": shown,
+            "accepted": acc,
+            "acceptance_rate": (acc / shown) if shown else None,
+            "accepted_lines": sum(r["lines"] for r in rows if r["accepted"]),
+            "rejected": sum(1 for r in rows if r["decision"] == "rejected"),
+            "ignored": sum(1 for r in rows if r["decision"] == "ignored"),
+            "median_latency_ms": _median_float(lat),
+            "median_time_to_accept_ms": _median_float(
+                [r["time_to_decision_ms"] for r in rows if r["accepted"] and r["time_to_decision_ms"] is not None]),
+        })
+    shown_t = len(all_rows)
+    acc_t = sum(1 for r in all_rows if r["accepted"])
+
+    def _ttd(decision: str) -> Optional[float]:
+        return _median_float([r["time_to_decision_ms"] for r in all_rows
+                              if r["decision"] == decision and r["time_to_decision_ms"] is not None])
+
+    return {
+        "sessions": len(sessions),
+        "shown_total": shown_t,
+        "accepted_total": acc_t,
+        "rejected_total": sum(1 for r in all_rows if r["decision"] == "rejected"),
+        "ignored_total": sum(1 for r in all_rows if r["decision"] == "ignored"),
+        "median_time_to_accept_ms": _ttd("accepted"),
+        "median_time_to_reject_ms": _ttd("rejected"),
+        "median_time_to_ignore_ms": _ttd("ignored"),
+        "acceptance_rate": (acc_t / shown_t) if shown_t else None,
+        "accepted_lines_total": sum(r["lines"] for r in all_rows if r["accepted"]),
+        "median_latency_ms": _median_float([r["latency_ms"] for r in all_rows if r["latency_ms"] is not None]),
+        "by_problem": {
+            "shown": _per_problem(all_rows, n, lambda r: 1),
+            "accepted": _per_problem(all_rows, n, lambda r: 1 if r["accepted"] else 0),
+        },
+        "latency_ms_all": [r["latency_ms"] for r in all_rows if r["latency_ms"] is not None],
+        "time_to_decision_ms_all": {
+            d: [r["time_to_decision_ms"] for r in all_rows if r["decision"] == d and r["time_to_decision_ms"] is not None]
+            for d in ("accepted", "rejected", "ignored")
+        },
+        "per_student": per_student,
+    }
+
+
+def build_agent_panel(sessions: List[Tuple[Dict[str, Any], Dict[str, Any]]], n: int) -> Dict[str, Any]:
+    """sessions: (derived metrics, raw user_data) for condition-3 sessions."""
+    per_student: List[Dict[str, Any]] = []
+    all_rows: List[Dict[str, Any]] = []
+    kept = undone = 0
+    for d, ud in sessions:
+        rows = agent_interaction_rows(ud)
+        all_rows.extend(rows)
+        # Decisions are counted from the activity log so edits from any turn are included.
+        k = u = 0
+        for e in _activity_entries(ud):
+            if _entry_activity_type(e) == "agent_edit_decision":
+                _ad = e.get("activity_details")
+                dec = (_ad if isinstance(_ad, dict) else {}).get("decision")
+                k += dec == "keep"
+                u += dec == "undo"
+        kept += k
+        undone += u
+        durs = [r["duration_seconds"] for r in rows if r["duration_seconds"] is not None]
+        per_student.append({
+            "user_id": d.get("user_id") or "",
+            "session_id": d.get("session_id") or "",
+            "completed": bool(d.get("completed_assignment")),
+            "interactions": len(rows),
+            "median_duration_seconds": _median_float(durs),
+            "lines_added": sum(r["lines_added"] for r in rows),
+            "lines_removed": sum(r["lines_removed"] for r in rows),
+            "edits_kept": k,
+            "edits_undone": u,
+            "tokens": sum(r["prompt_tokens"] + r["completion_tokens"] for r in rows),
+        })
+    modes: Dict[str, int] = {}
+    statuses: Dict[str, int] = {}
+    for r in all_rows:
+        modes[r["mode"] or "unknown"] = modes.get(r["mode"] or "unknown", 0) + 1
+        statuses[r["status"] or "unknown"] = statuses.get(r["status"] or "unknown", 0) + 1
+    durs_all = [r["duration_seconds"] for r in all_rows if r["duration_seconds"] is not None]
+    dur_by_problem: List[List[float]] = [[] for _ in range(n)]
+    for r in all_rows:
+        pi = r["problem_index"] if r["problem_index"] is not None else (0 if n == 1 else None)
+        if isinstance(pi, int) and 0 <= pi < n and r["duration_seconds"] is not None:
+            dur_by_problem[pi].append(r["duration_seconds"])
+    return {
+        "sessions": len(sessions),
+        "interactions_total": len(all_rows),
+        "median_interactions_per_student": _median_float([float(s["interactions"]) for s in per_student]),
+        "median_duration_seconds": _median_float(durs_all),
+        "median_first_output_seconds": _median_float(
+            [r["first_output_seconds"] for r in all_rows if r["first_output_seconds"] is not None]),
+        "lines_added_total": sum(r["lines_added"] for r in all_rows),
+        "lines_removed_total": sum(r["lines_removed"] for r in all_rows),
+        "edits_kept": kept,
+        "edits_undone": undone,
+        "modes": modes,
+        "statuses": statuses,
+        "tokens_total": sum(r["prompt_tokens"] + r["completion_tokens"] for r in all_rows),
+        "by_problem": {
+            "interactions": _per_problem(all_rows, n, lambda r: 1),
+            "lines_added": _per_problem(all_rows, n, lambda r: r["lines_added"]),
+            "lines_removed": _per_problem(all_rows, n, lambda r: r["lines_removed"]),
+            "duration_seconds": dur_by_problem,
+        },
+        "duration_seconds_all": durs_all,
+        "per_student": per_student,
+    }
+
+
+def _matched_sessions_by_condition(
+    sessions: List[Dict[str, Any]], quiz_id: str, n: int, condition: int
+) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    out = []
+    for ud in sessions:
+        if not isinstance(ud, dict) or _session_condition_int(ud) != condition:
+            continue
+        d = derive_session_metrics(ud, quiz_id, n)
+        if d is not None:
+            out.append((d, ud))
+    return out
+
+
+def export_agent_interactions_csv(
+    sessions: List[Dict[str, Any]], quiz_id: str, problem_labels: List[str], user_id: Optional[str] = None
+) -> str:
+    """One row per agent interaction across all condition-3 students of this quiz (or one student)."""
+    n = max(1, len(problem_labels))
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "user_id", "session_id", "interaction_index", "turn_id", "problem_index", "problem_label",
+        "started_at", "ended_at", "duration_seconds", "first_output_seconds", "status", "mode", "model",
+        "skills", "user_prompt", "agent_response", "files_changed", "lines_added", "lines_removed",
+        "edits", "edit_diffs", "edit_verdict", "kept_files", "undone_files", "decided_at",
+        "time_to_decision_seconds", "tool_calls",
+        "prompt_tokens", "completion_tokens", "error",
+    ])
+    for d, ud in _matched_sessions_by_condition(sessions, quiz_id, n, CONDITION_AGENT):
+        if user_id and d.get("user_id") != user_id:
+            continue
+        for r in agent_interaction_rows(ud):
+            pi = r["problem_index"]
+            w.writerow([
+                d.get("user_id") or "", d.get("session_id") or "", r["index"], r["turn_id"],
+                "" if pi is None else pi,
+                problem_labels[pi] if isinstance(pi, int) and 0 <= pi < len(problem_labels) else "",
+                r["started_at"], r["ended_at"],
+                _round_or_none(r["duration_seconds"], 3), _round_or_none(r["first_output_seconds"], 3),
+                r["status"], r["mode"], r["model"], "; ".join(r["skills"]),
+                r["prompt"], r["response"], "; ".join(r["files_changed"]),
+                r["lines_added"], r["lines_removed"],
+                "; ".join(f"{x.get('action')} {x.get('filename')} (+{x.get('lines_added', '?')} "
+                          f"-{x.get('lines_removed', '?')})" for x in r["edits"]),
+                "\n\n".join(str(x.get("diff") or "") for x in r["edits"]),
+                r["edit_verdict"], "; ".join(r["kept_files"]), "; ".join(r["undone_files"]), r["decided_at"],
+                _round_or_none(r["time_to_decision_seconds"], 3), "; ".join(map(str, r["tool_calls"])),
+                r["prompt_tokens"], r["completion_tokens"], r["error"],
+            ])
+    return buf.getvalue()
+
+
+def export_autocomplete_csv(
+    sessions: List[Dict[str, Any]], quiz_id: str, problem_labels: List[str], user_id: Optional[str] = None
+) -> str:
+    """One row per inline suggestion shown, across all condition-2 students of this quiz (or one student)."""
+    n = max(1, len(problem_labels))
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([
+        "user_id", "session_id", "suggestion_index", "suggestion_id", "problem_index", "problem_label",
+        "shown_at", "generation_latency_ms", "decision", "decided_at", "time_to_decision_ms",
+        "file", "line", "column", "suggestion_lines", "suggestion_text", "code_in_ide_when_shown",
+    ])
+    for d, ud in _matched_sessions_by_condition(sessions, quiz_id, n, CONDITION_AUTOCOMPLETE):
+        if user_id and d.get("user_id") != user_id:
+            continue
+        for i, r in enumerate(autocomplete_suggestion_rows(ud), 1):
+            pi = r["problem_index"]
+            w.writerow([
+                d.get("user_id") or "", d.get("session_id") or "", i, r["suggestion_id"],
+                "" if pi is None else pi,
+                problem_labels[pi] if isinstance(pi, int) and 0 <= pi < len(problem_labels) else "",
+                r["shown_at"] or "", "" if r["latency_ms"] is None else int(r["latency_ms"]),
+                r["decision"], r["decided_at"] or "",
+                "" if r["time_to_decision_ms"] is None else int(r["time_to_decision_ms"]),
+                r["file"], "" if r["line"] is None else r["line"], "" if r["column"] is None else r["column"],
+                r["lines"], r["text"], r["code_snapshot"],
+            ])
+    return buf.getvalue()
+
+
+def activity_timeline_rows(user_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every activity event of one session in time order, with its details as compact text (student page)."""
+    rows: List[Dict[str, Any]] = []
+    for e in _sorted_activity_entries_chrono(user_data):
+        _ad = e.get("activity_details")
+        ad: Dict[str, Any] = _ad if isinstance(_ad, dict) else {}
+        parts = []
+        for k, v in ad.items():
+            if v is None or v == "" or k in ("text", "content"):
+                continue
+            sv = json.dumps(v, ensure_ascii=False) if isinstance(v, (dict, list)) else str(v)
+            parts.append(f"{k}: {sv[:160]}")
+        rows.append({
+            "timestamp": e.get("timestamp") or "",
+            "problem_index": _problem_index_from_entry(e),
+            "activity_type": _entry_activity_type(e),
+            "details": " · ".join(parts),
+        })
+    return rows

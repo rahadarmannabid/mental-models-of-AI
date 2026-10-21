@@ -190,7 +190,7 @@
         <p>Logged in as <strong>{{ instructor_email }}</strong></p>
       </div>
       <div>
-        <span class="badge neutral">{{ quizzes|length }} quiz{% if quizzes|length != 1 %}zes{% endif %} total</span>
+        <span class="badge neutral" id="quizCount">{{ quizzes|length }} quiz{% if quizzes|length != 1 %}zes{% endif %} total</span>
       </div>
     </div>
 
@@ -216,9 +216,9 @@
 
         <div class="meta">
           {% if q.published %}
-            <span class="badge published">Published</span>
+            <span class="badge published" data-pub-badge>Published</span>
           {% else %}
-            <span class="badge draft">Draft</span>
+            <span class="badge draft" data-pub-badge>Draft</span>
           {% endif %}
           {% for lang in (q.allowed_languages or []) %}
             <span class="badge lang">{{ lang }}</span>
@@ -248,14 +248,14 @@
 
         <div class="card-actions">
           <a href="/instructor/edit-quiz/{{ q.id }}" class="btn-edit">Edit</a>
-          <button type="button" class="btn-duplicate" onclick="duplicateQuiz('{{ q.id }}')" title="Duplicate quiz">Duplicate</button>
+          <button type="button" class="btn-duplicate" onclick="duplicateQuiz(this, '{{ q.id }}')" title="Duplicate quiz">Duplicate</button>
           <a href="/instructor/quiz/{{ q.id }}/analytics" class="btn-analytics">Analytics</a>
           {% if q.published %}
-            <button class="btn-unpublish" onclick="togglePublish('{{ q.id }}')">Unpublish</button>
+            <button class="btn-unpublish" onclick="togglePublish(this, '{{ q.id }}')">Unpublish</button>
           {% else %}
-            <button class="btn-publish" onclick="togglePublish('{{ q.id }}')">Publish</button>
+            <button class="btn-publish" onclick="togglePublish(this, '{{ q.id }}')">Publish</button>
           {% endif %}
-          <button class="btn-delete" onclick="deleteQuiz('{{ q.id }}', '{{ q.title }}')" title="Delete Quiz">🗑️</button>
+          <button class="btn-delete" onclick="deleteQuiz(this, '{{ q.id }}')" title="Delete quiz" aria-label="Delete quiz">🗑️</button>
         </div>
       </div>
       {% endfor %}
@@ -271,39 +271,107 @@
 
   <div class="toast" id="toast"></div>
 
+  <script src="/static/ui-motion.js"></script>
   <script>
-    function showToast(msg) {
-      const t = document.getElementById('toast');
-      t.innerHTML = msg; // allow icons if needed
-      t.classList.add('show');
-      setTimeout(() => t.classList.remove('show'), 3000);
+    function showToast(msg, type) {
+      UIMotion.toast(msg, type || 'success');
     }
 
-    function copyCode(code) {
+    UIMotion.enter(document.querySelectorAll('.quiz-card'));
+
+    // navigator.clipboard only exists on secure pages (https or localhost). When the dashboard is
+    // opened over plain http (e.g. a LAN IP), fall back to execCommand, then to a manual-copy prompt.
+    function copyTextFallback(text) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      document.body.appendChild(ta);
+      ta.select();
+      ta.setSelectionRange(0, text.length);
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      ta.remove();
+      return ok;
+    }
+
+    async function copyCode(code) {
       const url = window.location.origin + '/quiz/' + code;
-      navigator.clipboard.writeText(url).then(() => showToast('Share link copied to clipboard!'));
-    }
-
-    async function togglePublish(quizId) {
-      const res = await fetch('/instructor/toggle-publish/' + quizId, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) location.reload();
-    }
-
-    async function deleteQuiz(quizId, title) {
-      if (!confirm('Are you sure you want to delete "' + title + '"? This action cannot be undone.')) return;
-      const res = await fetch('/instructor/delete-quiz/' + quizId, { method: 'DELETE' });
-      const data = await res.json();
-      if (data.success) location.reload();
-    }
-
-    async function duplicateQuiz(quizId) {
-      const res = await fetch('/instructor/duplicate-quiz/' + quizId, { method: 'POST' });
-      const data = await res.json();
-      if (data.success) {
-        window.location.href = '/instructor/edit-quiz/' + data.quiz_id;
+      let ok = false;
+      if (navigator.clipboard && window.isSecureContext) {
+        try { await navigator.clipboard.writeText(url); ok = true; } catch (e) { ok = false; }
+      }
+      if (!ok) ok = copyTextFallback(url);
+      if (ok) {
+        showToast('Share link copied to clipboard!');
       } else {
-        alert(data.error || 'Could not duplicate quiz.');
+        window.prompt('Copy this share link:', url);
+      }
+    }
+
+    async function togglePublish(btn, quizId) {
+      const card = btn.closest('.quiz-card');
+      const restore = UIMotion.busy(btn, btn.textContent.trim() === 'Publish' ? 'Publishing…' : 'Unpublishing…');
+      try {
+        const res = await fetch('/instructor/toggle-publish/' + quizId, { method: 'POST' });
+        const data = await res.json();
+        restore();
+        if (!data.success) throw new Error(data.error || 'Could not change the quiz status.');
+        // Update the card in place instead of reloading the page
+        const badge = card.querySelector('[data-pub-badge]');
+        badge.className = 'badge ' + (data.published ? 'published' : 'draft');
+        badge.textContent = data.published ? 'Published' : 'Draft';
+        btn.className = data.published ? 'btn-unpublish' : 'btn-publish';
+        btn.textContent = data.published ? 'Unpublish' : 'Publish';
+        if (badge.animate) badge.animate([{ transform: 'scale(1.25)' }, { transform: 'scale(1)' }], { duration: 260, easing: 'cubic-bezier(.2,.9,.3,1.4)' });
+        UIMotion.toast(data.published ? 'Quiz published. Students can open it with its link.' : 'Quiz unpublished. Students can no longer join.', 'success');
+      } catch (e) {
+        restore();
+        UIMotion.shake(card);
+        UIMotion.toast(e.message || 'Could not change the quiz status.', 'error');
+      }
+    }
+
+    async function deleteQuiz(btn, quizId) {
+      const card = btn.closest('.quiz-card');
+      const title = (card.querySelector('h3') || {}).textContent || 'this quiz';
+      const ok = await UIMotion.confirm({
+        title: 'Delete this quiz?',
+        message: 'Its share link stops working and the quiz is removed from your dashboard. This cannot be undone.',
+        item: title.trim(),
+        confirmText: 'Delete quiz',
+      });
+      if (!ok) return;
+      const restore = UIMotion.busy(btn, '');
+      try {
+        const res = await fetch('/instructor/delete-quiz/' + quizId, { method: 'DELETE' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Could not delete the quiz.');
+        await UIMotion.remove(card);
+        const left = document.querySelectorAll('.quiz-card').length;
+        const count = document.getElementById('quizCount');
+        if (count) count.textContent = left + (left === 1 ? ' quiz' : ' quizzes') + ' total';
+        UIMotion.toast('Deleted "' + title.trim() + '"', 'success');
+        if (left === 0) setTimeout(function () { location.reload(); }, 900);  // show the empty state
+      } catch (e) {
+        restore();
+        UIMotion.shake(card);
+        UIMotion.toast(e.message || 'Could not delete the quiz.', 'error');
+      }
+    }
+
+    async function duplicateQuiz(btn, quizId) {
+      const restore = UIMotion.busy(btn, 'Duplicating…');
+      try {
+        const res = await fetch('/instructor/duplicate-quiz/' + quizId, { method: 'POST' });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Could not duplicate quiz.');
+        UIMotion.toast('Copy created. Opening it…', 'success');
+        setTimeout(function () { window.location.href = '/instructor/edit-quiz/' + data.quiz_id; }, 500);
+      } catch (e) {
+        restore();
+        UIMotion.toast(e.message || 'Could not duplicate quiz.', 'error');
       }
     }
   </script>

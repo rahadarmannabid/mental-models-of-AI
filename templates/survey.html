@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Survey - AI Code Assistant</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="/static/diagram-widget.js"></script>
     <style>
         * {
             margin: 0;
@@ -143,6 +144,16 @@
             color: #52525b;
             font-size: 10px;
         }
+
+        .progress-label {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 8px;
+            color: #94a3b8;
+            font-size: 13px;
+        }
+        #progressPosition { color: #d4d4d4; font-weight: 600; }
 
         .progress-bar {
             width: 100%;
@@ -320,6 +331,20 @@
             transition: all 0.3s;
         }
 
+        .choice-option input[type="checkbox"] { width: 16px; height: 16px; margin: 0 10px 0 0; accent-color: #0a84ff; cursor: pointer; flex-shrink: 0; }
+        .other-text {
+            width: 100%; margin: 4px 0 8px; padding: 10px 12px; border-radius: 8px;
+            background: #1e1e1e; color: #e0e0e0; border: 1px solid #444; font-size: 14px;
+        }
+        .other-text:focus { outline: none; border-color: #0a84ff; }
+        .matrix-wrap { overflow-x: auto; margin-top: 10px; }
+        .matrix-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .matrix-table th, .matrix-table td { padding: 10px 8px; border-bottom: 1px solid #333; text-align: center; }
+        .matrix-table thead th { color: #aaa; font-weight: 500; font-size: 13px; }
+        .matrix-table tbody th { text-align: left; color: #ddd; font-weight: 400; min-width: 160px; }
+        .matrix-table td { cursor: pointer; }
+        .matrix-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+        .matrix-table input[type="radio"] { width: 18px; height: 18px; accent-color: #0a84ff; cursor: pointer; }
         .choice-option:has(input:checked) {
             border-color: #f97316;
             background: rgba(249, 115, 22, 0.1);
@@ -384,6 +409,32 @@
         .btn-primary {
             background: linear-gradient(135deg, #f97316, #ea580c);
             color: white;
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: #d4d4d4;
+            border: 1px solid #555;
+        }
+
+        .btn-secondary:hover:not(:disabled) { border-color: #888; }
+        .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+        .btn-secondary:disabled::before { display: none; }
+        /* ID selectors so these win over the shared theme's blue .btn rules */
+        #prevBtn { background: transparent !important; color: #d4d4d4 !important; border: 1px solid #555 !important; }
+        #prevBtn:hover:not(:disabled) { background: #2a2a2a !important; border-color: #888 !important; }
+        #prevBtn:disabled, #nextBtn:disabled, #submitBtn:disabled {
+            background: #3a3a3a !important; color: #777 !important; border: 1px solid #444 !important;
+            opacity: 1 !important; cursor: not-allowed !important;
+        }
+
+        .button-group { align-items: center; }
+
+        .page-indicator {
+            color: #94a3b8;
+            font-size: 14px;
+            min-width: 48px;
+            text-align: center;
         }
 
         .btn-primary:hover:not(:disabled) {
@@ -842,10 +893,13 @@
         <div id="quizFlowProgress" class="quiz-flow-progress" style="display:none;" role="navigation" aria-label="Quiz progress"></div>
         <div class="survey-header">
             <h1 id="surveyTitle">Loading Survey...</h1>
-            <p id="resumeContextHint" style="display:none; font-size: 13px; color: #94a3b8; margin-top: 6px;"></p>
             <p id="surveyDescription"></p>
         </div>
 
+        <div class="progress-label" id="progressLabel" style="display:none;" aria-live="polite">
+            <span id="progressPosition"></span>
+            <span id="progressCount"></span>
+        </div>
         <div class="progress-bar">
             <div class="progress-fill" id="progressFill"></div>
         </div>
@@ -858,16 +912,10 @@
         <div id="errorMessage" class="error-message" style="display: none;"></div>
 
         <div class="button-group" id="buttonGroup" style="display: none;">
+            <button class="btn btn-secondary" id="prevBtn" type="button" style="display: none;">Back</button>
+            <span class="page-indicator" id="pageIndicator"></span>
+            <button class="btn btn-primary" id="nextBtn" type="button" style="display: none;">Next</button>
             <button class="btn btn-primary" id="submitBtn">Submit Survey</button>
-        </div>
-
-        <div class="info-section" style="display: none;" id="infoSection">
-            <div class="info-text">
-                All questions must be completed to submit the survey. Previous answers are shown when available — you can edit them before submitting. Your responses are securely stored and used for research purposes only.
-            </div>
-            <div class="security-badge">
-                🔒 Secure Research Survey
-            </div>
         </div>
     </div>
 
@@ -954,6 +1002,8 @@
 
                 this.surveyConfig = null;
                 this.responses = {};
+                /** question id -> DiagramWidget instance (diagram questions) */
+                this.diagramWidgets = {};
                 this.startTime = Date.now();
                 this._surveyDraftSaveTimer = null;
                 this._serverSurveyDraftTimer = null;
@@ -1035,7 +1085,6 @@
                     // 2) Local draft overrides — in-progress work from this browser
                     this.applySurveyDraftFromStorage();
                     this.setupEventListeners();
-                    document.getElementById('infoSection').style.display = 'block';
                 } catch (error) {
                     console.error('Survey initialization error:', error);
                     this.showError('Failed to load survey. Please try again.');
@@ -1148,7 +1197,36 @@
                     if (!el) continue;
 
                     const qidStr = String(q.id);
-                    if (q.type === 'likert' || q.type === 'likert_7_with_na' || q.type === 'multiple_choice') {
+                    if (q.type === 'diagram') {
+                        const w = this.diagramWidgets[qidStr];
+                        if (w) w.setAnswer(val);
+                        const ans = w ? w.getAnswer() : (val && val.kind === 'diagram' ? val : null);
+                        if (!ans) {
+                            delete this.responses[q.id];
+                            continue;
+                        }
+                        this.responses[q.id] = ans;
+                    } else if (q.type === 'multiple_choice' || q.type === 'checkboxes') {
+                        const picked = Array.isArray(val) ? val.map(String) : [String(val)];
+                        const otherVal = picked.find((x) => x.startsWith('Other:'));
+                        el.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach((inp) => {
+                            if (String(inp.name) !== qidStr) return;
+                            inp.checked = inp.value === '__other__' ? otherVal !== undefined : picked.includes(String(inp.value));
+                        });
+                        const otherText = el.querySelector('.other-text');
+                        if (otherText) {
+                            otherText.value = otherVal !== undefined ? otherVal.replace(/^Other:\s*/, '') : '';
+                            otherText.style.display = otherVal !== undefined ? '' : 'none';
+                        }
+                    } else if (q.type === 'matrix') {
+                        if (val && typeof val === 'object') {
+                            (q.rows || []).forEach((row, ri) => {
+                                el.querySelectorAll(`input[name="${CSS.escape(qidStr + '__r' + ri)}"]`).forEach((inp) => {
+                                    inp.checked = val[row] !== undefined && String(inp.value) === String(val[row]);
+                                });
+                            });
+                        }
+                    } else if (q.type === 'likert' || q.type === 'likert_7_with_na') {
                         el.querySelectorAll('input[type="radio"]').forEach((radio) => {
                             if (String(radio.name) === qidStr && String(radio.value) === String(val)) radio.checked = true;
                         });
@@ -1226,7 +1304,8 @@
                 const authData = JSON.parse(sessionStorage.getItem('authData') || '{}');
                 // Use this.problemIndex (synced from server in init) as the authoritative value
                 const problemIndex = typeof this.problemIndex === 'number' ? this.problemIndex : (authData.currentProblemIndex || 0);
-                const response = await fetch(`/survey-config/${this.assignmentKey}?problem_index=${problemIndex}`);
+                const sid = this.sessionId ? `&session_id=${encodeURIComponent(this.sessionId)}` : '';
+                const response = await fetch(`/survey-config/${this.assignmentKey}?problem_index=${problemIndex}${sid}`);
                 if (!response.ok) throw new Error('Failed to load survey config');
                 
                 const config = await response.json();
@@ -1241,20 +1320,9 @@
 
                 // Update header - add mandatory message
                 document.getElementById('surveyTitle').textContent = this.surveyConfig.title || `${this.surveyType.toUpperCase()} Survey`;
-                const descriptionText = this.surveyConfig.description || '';
-                document.getElementById('surveyDescription').textContent = descriptionText + (descriptionText ? ' ' : '') + 'All questions are mandatory. You can edit your answers before submitting.';
-                const hintEl = document.getElementById('resumeContextHint');
-                if (hintEl) {
-                    const ad = JSON.parse(sessionStorage.getItem('authData') || '{}');
-                    // Use this.problemIndex (synced from server) for the label
-                    const pi = (typeof this.problemIndex === 'number' ? this.problemIndex : (ad.currentProblemIndex || 0)) + 1;
-                    const tp = ad.totalProblems || 1;
-                    const label = this.surveyType === 'pre' ? 'Pre-study' : 'Post-study';
-                    hintEl.style.display = 'block';
-                    hintEl.textContent = tp > 1
-                        ? `${label} · Problem ${pi} of ${tp} — previous answers are shown when available; you can change them before submitting.`
-                        : `${label} — previous answers are shown when available; you can change them before submitting.`;
-                }
+                const descEl = document.getElementById('surveyDescription');
+                descEl.textContent = this.surveyConfig.description || '';
+                descEl.style.display = descEl.textContent ? '' : 'none';
             }
 
             renderSurvey() {
@@ -1266,6 +1334,7 @@
                 if (this.surveyConfig.header_image) {
                     const headerImg = document.createElement('img');
                     headerImg.className = 'survey-header-image';
+                    headerImg.dataset.page = '0';
                     headerImg.src = surveyImageUrlFromSrc(this.surveyConfig.header_image.src);
                     headerImg.alt = this.surveyConfig.header_image.alt || 'Survey header';
                     headerImg.onerror = () => {
@@ -1275,10 +1344,24 @@
                     content.appendChild(headerImg);
                 }
 
-                // Filter out info_block from question numbering
+                // Pages hold at most QUESTIONS_PER_PAGE questions. Large ones (diagrams, grids,
+                // questions with an image) get a page alone; an info block opens the page of the
+                // question that follows it.
+                const QUESTIONS_PER_PAGE = 2;
+                const isLarge = (q) => q.type === 'diagram' || q.type === 'matrix' || !!(q.image && q.image.src);
+                const countQuestions = (page) => page.filter((q) => q.type !== 'info_block').length;
+                this.pages = [];
+                let group = null;
                 let questionNumber = 1;
                 this.surveyConfig.questions.forEach((question) => {
                     const questionDiv = this.createQuestionElement(question, questionNumber - 1);
+                    const n = group ? countQuestions(group) : 0;
+                    const full = question.type === 'info_block' || isLarge(question)
+                        ? n > 0
+                        : n >= QUESTIONS_PER_PAGE || (n > 0 && group.some(isLarge));
+                    if (!group || full) { group = []; this.pages.push(group); }
+                    group.push(question);
+                    questionDiv.dataset.page = String(this.pages.length - 1);
                     content.appendChild(questionDiv);
                     
                     // Only increment for actual questions, not info blocks
@@ -1286,10 +1369,118 @@
                         questionNumber++;
                     }
                 });
+                if (!this.pages.length) this.pages.push([]);
 
                 document.getElementById('buttonGroup').style.display = 'flex';
                 document.getElementById('submitBtn').disabled = true;
+                let savedPage = 0;
+                try { savedPage = parseInt(sessionStorage.getItem(this.getPageStorageKey()) || '0', 10) || 0; } catch (e) { /* ignore */ }
+                this.showPage(savedPage);
                 this.updateProgress();
+            }
+
+            getPageStorageKey() {
+                return `surveyPage_${this.sessionId}_${this.surveyType}_p${this.problemIndex}`;
+            }
+
+            showPage(index) {
+                const count = this.pages.length;
+                const i = Math.max(0, Math.min(count - 1, index));
+                this.currentPage = i;
+                document.querySelectorAll('#surveyContent [data-page]').forEach((el) => {
+                    el.style.display = Number(el.dataset.page) === i ? '' : 'none';
+                });
+                const last = i === count - 1;
+                const prevBtn = document.getElementById('prevBtn');
+                const nextBtn = document.getElementById('nextBtn');
+                prevBtn.style.display = count > 1 ? '' : 'none';
+                nextBtn.style.display = count > 1 ? '' : 'none';
+                prevBtn.disabled = i === 0;
+                nextBtn.disabled = last;
+                document.getElementById('submitBtn').style.display = last ? '' : 'none';
+                document.getElementById('pageIndicator').textContent = count > 1 ? `${i + 1} / ${count}` : '';
+                try { sessionStorage.setItem(this.getPageStorageKey(), String(i)); } catch (e) { /* ignore */ }
+                this.updateProgress();
+                requestAnimationFrame(() => this.fitDiagramsToWindow(true));
+            }
+
+            /**
+             * Shrink the drawing area of diagrams on this page so the question, the whole widget
+             * (tools, area, Save) and the Back/Next buttons fit in the window without scrolling.
+             * If the page header leaves too little room, fit below the question text and scroll to it.
+             */
+            fitDiagramsToWindow(scroll) {
+                const page = this.pages ? this.pages[this.currentPage] || [] : [];
+                const buttons = document.getElementById('buttonGroup');
+                page.forEach((q) => {
+                    const w = q.type === 'diagram' ? this.diagramWidgets[String(q.id)] : null;
+                    if (!w || !w.root || !w.root.offsetHeight || !buttons) return;
+                    const box = w.root.getBoundingClientRect();
+                    const below = buttons.getBoundingClientRect().bottom - box.bottom + 16;
+                    const above = box.top + window.scrollY;
+                    let room = window.innerHeight - above - below;
+                    const qEl = this.findQuestionElement(q.id);
+                    if (qEl) qEl.querySelectorAll('img').forEach((img) => {
+                        if (!img.complete && !img.dataset.fitWait) {
+                            img.dataset.fitWait = '1';
+                            img.addEventListener('load', () => this.fitDiagramsToWindow(false), { once: true });
+                        }
+                    });
+                    if (room < 560 && qEl) {
+                        room = window.innerHeight - (box.top - qEl.getBoundingClientRect().top) - below - 8;
+                        if (scroll) setTimeout(() => qEl.scrollIntoView({ block: 'start' }), 50);
+                    }
+                    w.fitHeight(room);
+                });
+            }
+
+            pageOfQuestion(q) {
+                return this.pages.findIndex((page) => page.includes(q));
+            }
+
+            isQuestionAnswered(q) {
+                const v = this.getAnswerForQuestion(q);
+                if (v === undefined || v === null) return false;
+                if (typeof v === 'string') {
+                    if (!v.trim()) return false;
+                    if (q.type === 'open_ended' && q.min_length && v.trim().length < q.min_length) return false;
+                }
+                return true;
+            }
+
+            hideError() {
+                const errorDiv = document.getElementById('errorMessage');
+                if (errorDiv) errorDiv.style.display = 'none';
+            }
+
+            async goToNextPage() {
+                const page = this.pages[this.currentPage] || [];
+                const missing = page.filter((q) => q.type !== 'info_block' && q.required !== false && !this.isQuestionAnswered(q));
+                if (missing.length) {
+                    this.showError('Please answer the required questions on this page.', 'warning');
+                    const el = this.findQuestionElement(missing[0].id);
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    return;
+                }
+                const nextBtn = document.getElementById('nextBtn');
+                nextBtn.disabled = true;
+                try {
+                    for (const q of page) {
+                        const w = q.type === 'diagram' ? this.diagramWidgets[String(q.id)] : null;
+                        if (!w || !w.isDirty() || w.isEmpty()) continue;
+                        const answer = await w.save();
+                        if (!answer) {
+                            this.showError('Your diagram could not be saved. Check your connection and try again.');
+                            return;
+                        }
+                        this.handleResponse(q.id, answer);
+                    }
+                } finally {
+                    nextBtn.disabled = false;
+                }
+                this.hideError();
+                this.showPage(this.currentPage + 1);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
             }
 
             createQuestionElement(question, index) {
@@ -1346,8 +1537,14 @@
                     div.appendChild(this.createSlider(question));
                 } else if (question.type === 'multiple_choice') {
                     div.appendChild(this.createMultipleChoice(question));
+                } else if (question.type === 'checkboxes') {
+                    div.appendChild(this.createChoiceList(question, true));
+                } else if (question.type === 'matrix') {
+                    div.appendChild(this.createMatrix(question));
                 } else if (question.type === 'open_ended') {
                     div.appendChild(this.createOpenEnded(question));
+                } else if (question.type === 'diagram') {
+                    div.appendChild(this.createDiagram(question));
                 }
 
                 return div;
@@ -1505,39 +1702,146 @@
             }
 
             createMultipleChoice(question) {
+                return this.createChoiceList(question, false);
+            }
+
+            /** Radio (single) or checkbox (multi) list; allow_other adds "Other (please specify)" with a text box. */
+            createChoiceList(question, multi) {
                 const container = document.createElement('div');
                 container.className = 'multiple-choice';
+                const qid = String(question.id);
+                const choices = (question.options || []).map((o) => ({ value: o, other: false }));
+                if (question.allow_other) choices.push({ value: question.other_label || 'Other (please specify)', other: true });
 
-                question.options.forEach((option, index) => {
+                const otherText = document.createElement('input');
+                otherText.type = 'text';
+                otherText.className = 'other-text';
+                otherText.placeholder = 'Please specify';
+                otherText.maxLength = 200;
+                otherText.style.display = 'none';
+
+                const inputs = [];
+                const update = () => {
+                    const otherOn = inputs.some((x) => x.other && x.input.checked);
+                    otherText.style.display = otherOn ? '' : 'none';
+                    const picked = inputs.filter((x) => x.input.checked)
+                        .map((x) => (x.other ? `Other: ${otherText.value.trim()}` : x.value));
+                    if (multi) {
+                        if (picked.length) this.handleResponse(question.id, picked);
+                        else this.clearResponse(question.id);
+                    } else if (picked.length) {
+                        this.handleResponse(question.id, picked[0]);
+                    }
+                };
+
+                choices.forEach((choice, index) => {
                     const optionDiv = document.createElement('div');
                     optionDiv.className = 'choice-option';
 
                     const input = document.createElement('input');
-                    input.type = 'radio';
-                    input.name = question.id;
-                    input.value = option;
-                    input.id = `${question.id}_${index}`;
-                    input.addEventListener('change', () => this.handleResponse(question.id, option));
+                    input.type = multi ? 'checkbox' : 'radio';
+                    input.name = qid;
+                    input.value = choice.other ? '__other__' : choice.value;
+                    input.id = `${qid}_${index}`;
+                    input.addEventListener('change', () => {
+                        update();
+                        if (choice.other && input.checked) otherText.focus();
+                    });
 
                     const label = document.createElement('label');
                     label.htmlFor = input.id;
-                    label.textContent = option;
+                    label.textContent = choice.value;
 
                     optionDiv.appendChild(input);
                     optionDiv.appendChild(label);
-                    
-                    // Make entire div clickable
+                    // Whole row is clickable (the label already toggles the input itself)
                     optionDiv.addEventListener('click', (e) => {
-                        if (e.target !== input) {
-                            input.checked = true;
-                            this.handleResponse(question.id, option);
-                        }
+                        if (e.target === input || e.target === label) return;
+                        input.checked = multi ? !input.checked : true;
+                        input.dispatchEvent(new Event('change'));
                     });
-                    
+                    inputs.push({ input, value: choice.value, other: choice.other });
                     container.appendChild(optionDiv);
+                    if (choice.other) container.appendChild(otherText);
                 });
-
+                otherText.addEventListener('input', update);
                 return container;
+            }
+
+            /** Grid: one single-choice answer per row; the answer is { row: column }. */
+            createMatrix(question) {
+                const wrap = document.createElement('div');
+                wrap.className = 'matrix-wrap';
+                const table = document.createElement('table');
+                table.className = 'matrix-table';
+                const rows = question.rows || [];
+                const cols = question.columns || [];
+                const qid = String(question.id);
+
+                const head = document.createElement('tr');
+                head.appendChild(document.createElement('th'));
+                cols.forEach((c) => {
+                    const th = document.createElement('th');
+                    th.textContent = c;
+                    head.appendChild(th);
+                });
+                const thead = document.createElement('thead');
+                thead.appendChild(head);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                rows.forEach((row, ri) => {
+                    const tr = document.createElement('tr');
+                    const rowLabel = document.createElement('th');
+                    rowLabel.scope = 'row';
+                    rowLabel.textContent = row;
+                    tr.appendChild(rowLabel);
+                    cols.forEach((col, ci) => {
+                        const td = document.createElement('td');
+                        const input = document.createElement('input');
+                        input.type = 'radio';
+                        input.name = `${qid}__r${ri}`;
+                        input.value = col;
+                        input.id = `${qid}_r${ri}_c${ci}`;
+                        input.setAttribute('aria-label', `${row}: ${col}`);
+                        input.addEventListener('change', () => {
+                            const cur = Object.assign({}, this.responses[question.id] || {});
+                            cur[row] = col;
+                            this.handleResponse(question.id, cur);
+                        });
+                        td.addEventListener('click', (e) => {
+                            if (e.target === input) return;
+                            input.checked = true;
+                            input.dispatchEvent(new Event('change'));
+                        });
+                        td.appendChild(input);
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+                wrap.appendChild(table);
+                return wrap;
+            }
+
+            /** False for partial answers: grid rows left blank, nothing ticked, or "Other" without text. */
+            isAnswerComplete(q, v) {
+                const otherEmpty = (x) => typeof x === 'string' && /^Other:\s*$/.test(x);
+                if (q.type === 'checkboxes') return Array.isArray(v) && v.length > 0 && !v.some(otherEmpty);
+                if (q.type === 'multiple_choice') return !otherEmpty(v);
+                if (q.type === 'matrix') {
+                    if (!v || typeof v !== 'object') return false;
+                    return (q.rows || []).every((r) => v[r] !== undefined && v[r] !== null && v[r] !== '');
+                }
+                return true;
+            }
+
+            clearResponse(questionId) {
+                delete this.responses[questionId];
+                const el = this.findQuestionElement(questionId);
+                if (el) el.classList.remove('answered');
+                this.updateProgress();
+                this.schedulePersistSurveyDraft();
             }
 
             createOpenEnded(question) {
@@ -1584,6 +1888,47 @@
                 container.appendChild(charCounter);
                 
                 return container;
+            }
+
+            createDiagram(question) {
+                const container = document.createElement('div');
+                if (!window.DiagramWidget) {
+                    container.className = 'error-message';
+                    container.textContent = 'The drawing tool could not be loaded. Please reload the page.';
+                    return container;
+                }
+                const qid = String(question.id);
+                const widget = window.DiagramWidget.mount(container, {
+                    question,
+                    storageKey: `diagramDraft_${this.sessionId}_${this.surveyType}_p${this.problemIndex}_${qid}`,
+                    saveUrl: '/diagram/save',
+                    large: true,
+                    saveContext: {
+                        session_id: this.sessionId,
+                        user_id: this.userId,
+                        context: this.surveyType,
+                        problem_index: this.problemIndex,
+                        question_id: qid
+                    },
+                    onSaved: (answer) => { if (answer) this.handleResponse(question.id, answer); },
+                    onChange: () => this.updateProgress()
+                });
+                this.diagramWidgets[qid] = widget;
+                // A diagram saved earlier from this device counts as answered right away.
+                if (widget.getAnswer()) this.responses[question.id] = widget.getAnswer();
+                return container;
+            }
+
+            /** Save every diagram that has unsaved work. Returns false if any save failed. */
+            async saveDiagramsBeforeSubmit() {
+                for (const qid of Object.keys(this.diagramWidgets)) {
+                    const w = this.diagramWidgets[qid];
+                    if (!w.isDirty() || w.isEmpty()) continue;
+                    const answer = await w.save();
+                    if (!answer) return false;
+                    this.handleResponse(qid, answer);
+                }
+                return true;
             }
 
             createImageElement(imageConfig, questionId) {
@@ -1728,10 +2073,14 @@
             /** Resolve stored answer for a question (IDs may be number in config, string in API/localStorage). */
             getAnswerForQuestion(q) {
                 if (!q) return undefined;
+                if (q.type === 'diagram') {
+                    const w = this.diagramWidgets[String(q.id)];
+                    if (w && !w.getAnswer() && !w.isEmpty()) return 'pending_diagram';
+                }
                 let v = this.responses[q.id];
-                if (v !== undefined && v !== null) return v;
-                v = this.responses[String(q.id)];
-                return v !== undefined && v !== null ? v : undefined;
+                if (v === undefined || v === null) v = this.responses[String(q.id)];
+                if (v === undefined || v === null) return undefined;
+                return this.isAnswerComplete(q, v) ? v : undefined;
             }
 
             handleResponse(questionId, answer) {
@@ -1758,6 +2107,7 @@
                 const progress = totalQuestions ? (answeredQuestions / totalQuestions) * 100 : 0;
 
                 document.getElementById('progressFill').style.width = `${progress}%`;
+                this.updateProgressLabel(totalQuestions, answeredQuestions);
 
                 const submitBtn = document.getElementById('submitBtn');
                 if (submitBtn) {
@@ -1769,6 +2119,24 @@
                     }).length;
                     submitBtn.disabled = answeredRequired < requiredQuestions.length;
                 }
+            }
+
+            /** "Question 3–4 of 17 · 2 answered · 15 left" above the progress bar. */
+            updateProgressLabel(total, answered) {
+                const el = document.getElementById('progressLabel');
+                if (!el) return;
+                if (!total || !this.pages) { el.textContent = ''; return; }
+                let first = 0;
+                for (let p = 0; p < this.currentPage; p++) {
+                    first += this.pages[p].filter((q) => q.type !== 'info_block').length;
+                }
+                const onPage = (this.pages[this.currentPage] || []).filter((q) => q.type !== 'info_block').length;
+                const range = onPage > 1 ? `${first + 1}–${first + onPage}` : `${Math.min(first + 1, total)}`;
+                document.getElementById('progressPosition').textContent = `Question ${range} of ${total}`;
+                const left = total - answered;
+                document.getElementById('progressCount').textContent =
+                    left ? `${answered} answered · ${left} left` : 'All questions answered';
+                el.style.display = '';
             }
 
             async updateSurveyStatus(status) {
@@ -1784,6 +2152,17 @@
 
             setupEventListeners() {
                 document.getElementById('submitBtn').addEventListener('click', () => this.submitSurvey());
+                document.getElementById('nextBtn').addEventListener('click', () => this.goToNextPage());
+                let fitTimer = null;
+                window.addEventListener('resize', () => {
+                    clearTimeout(fitTimer);
+                    fitTimer = setTimeout(() => this.fitDiagramsToWindow(false), 150);
+                });
+                document.getElementById('prevBtn').addEventListener('click', () => {
+                    this.hideError();
+                    this.showPage(this.currentPage - 1);
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                });
 
                 // Flush draft synchronously when leaving (IDE, back button, refresh) — debounced save may not have run.
                 window.addEventListener('pagehide', () => {
@@ -1818,6 +2197,10 @@
             }
 
             async submitSurvey() {
+                if (!(await this.saveDiagramsBeforeSubmit())) {
+                    this.showError('A diagram could not be saved to the server. Check your connection and click "Save diagram" again.');
+                    return;
+                }
                 const requiredQuestions = this.surveyConfig.questions.filter(q => q.required !== false && q.type !== 'info_block');
                 const unansweredRequired = requiredQuestions.filter(q => {
                     const v = this.getAnswerForQuestion(q);
@@ -1827,7 +2210,9 @@
                 });
                 
                 if (unansweredRequired.length > 0) {
-                    this.showError(`Please answer all required questions (${unansweredRequired.length} remaining).`);
+                    const p = this.pageOfQuestion(unansweredRequired[0]);
+                    if (p >= 0 && p !== this.currentPage) this.showPage(p);
+                    this.showError(`Please answer all required questions (${unansweredRequired.length} remaining).`, 'warning');
                     return;
                 }
                 
@@ -1847,7 +2232,7 @@
                 
                 if (invalidLengths.length > 0) {
                     const firstInvalid = invalidLengths[0];
-                    this.showError(`Some answers are too short. Please provide at least ${firstInvalid.minLength} characters for all text responses.`);
+                    this.showError(`Some answers are too short. Please provide at least ${firstInvalid.minLength} characters for all text responses.`, 'warning');
                     return;
                 }
 
@@ -1874,7 +2259,13 @@
                             scale: q.scale || null,
                             options: q.options || null,
                             placeholder: q.placeholder || null,
-                            max_length: q.max_length || null
+                            max_length: q.max_length || null,
+                            help_text: q.help_text || null,
+                            allow_other: q.allow_other || null,
+                            other_label: q.other_label || null,
+                            rows: q.rows || null,
+                            columns: q.columns || null,
+                            diagram: q.diagram || null
                         })),
                         responses: this.surveyConfig.questions.filter(q => q.type !== 'info_block').map(q => ({
                             question_id: q.id,
@@ -1886,7 +2277,11 @@
                                 placeholder: q.placeholder,
                                 max_length: q.max_length,
                                 min_length: q.min_length,
-                                help_text: q.help_text
+                                help_text: q.help_text,
+                                allow_other: q.allow_other,
+                                rows: q.rows,
+                                columns: q.columns,
+                                diagram: q.diagram
                             },
                             answer: this.responses[q.id] || null,
                             required: q.required !== false
@@ -1922,6 +2317,8 @@
                 }
                     await this.updateSurveyStatus('completed');
                     this.clearSurveyDraft();
+                    Object.values(this.diagramWidgets).forEach((w) => w.clearDraft());
+                    try { sessionStorage.removeItem(this.getPageStorageKey()); } catch (e) { /* ignore */ }
 
                     const authData = JSON.parse(sessionStorage.getItem('authData') || '{}');
                     const sessionToken = authData.sessionToken;
@@ -2401,19 +2798,8 @@
                 errorDiv.textContent = message;
                 errorDiv.style.display = 'block';
                 
-                if (type === 'success') {
-                    errorDiv.style.borderColor = '#22c55e';
-                    errorDiv.style.background = 'linear-gradient(135deg, #0e2f1e, #1a4d2e)';
-                    errorDiv.style.color = '#22c55e';
-                } else if (type === 'warning') {
-                    errorDiv.style.borderColor = '#f59e0b';
-                    errorDiv.style.background = 'linear-gradient(135deg, #2d2510, #3d3015)';
-                    errorDiv.style.color = '#f59e0b';
-                } else {
-                    errorDiv.style.borderColor = '#ef4444';
-                    errorDiv.style.background = 'linear-gradient(135deg, #2d1b1b, #3d2222)';
-                    errorDiv.style.color = '#ef4444';
-                }
+                // Red = failed, amber = answer something first, green = done, blue = in progress
+                ['success', 'warning', 'info'].forEach((t) => errorDiv.classList.toggle('is-' + t, t === type));
                 
                 setTimeout(() => errorDiv.style.display = 'none', 8000);
             }

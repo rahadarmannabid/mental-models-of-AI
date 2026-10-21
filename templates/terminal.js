@@ -1,7 +1,8 @@
 // Interactive terminal (all conditions), included by index.html.
-// A small shell: students type commands (python main.py, gcc main.c -o main && ./main, ls, cat…).
-// Python/C run on the server over /ws/run with live output and stdin; JavaScript runs in a Web
-// Worker. Server-side guardrails are in sandbox.py.
+// A small shell: students type commands (python main.py, gcc main.c -o main && ./main, pip install…, ls, cat…).
+// Python/C/C++/Java run on the server over /ws/run with live output and stdin; pictures the program
+// makes (matplotlib, turtle, saved images) arrive as "display" events and are shown inline.
+// JavaScript runs in a Web Worker. Server-side guardrails are in sandbox.py.
 // Relies on globals from index.html: currentSession, logActivity, addTerminalOutput,
 // queueActivityBatchUpload, runButton; and window.WS (workspace.js).
 (function () {
@@ -94,6 +95,36 @@
             this.placeInput();
         },
         finish: function () { this.open = null; this.setMode('shell'); this.scroll(); },
+        // A picture from the program (matplotlib figure, turtle drawing, saved image file).
+        figure: function (mime, data, name) {
+            this.open = null;
+            var src = 'data:' + mime + ';base64,' + data;
+            var box = document.createElement('div');
+            box.className = 'output-line term-figure';
+            box.style.cssText = 'margin:6px 0;display:flex;flex-direction:column;align-items:flex-start;gap:4px;';
+            var img = document.createElement('img');
+            img.src = src;
+            img.alt = name || 'Program output';
+            img.style.cssText = 'display:block;max-width:100%;max-height:420px;background:#fff;border-radius:6px;cursor:zoom-in;';
+            img.title = 'Open full size';
+            img.addEventListener('click', function () {
+                var w = window.open('', '_blank');
+                if (w) { w.document.title = name || 'Figure'; w.document.body.style.margin = '0';
+                         var big = w.document.createElement('img'); big.src = src; big.style.maxWidth = '100%'; w.document.body.appendChild(big); }
+            });
+            var link = document.createElement('a');
+            link.href = src;
+            link.download = name || 'figure.png';
+            link.textContent = '⬇ ' + (name || 'Download');
+            link.className = 'term-muted';
+            link.style.cssText = 'font-size:12px;text-decoration:none;';
+            box.appendChild(img);
+            box.appendChild(link);
+            this.out().appendChild(box);
+            img.addEventListener('load', this.scroll.bind(this));
+            this.placeInput();  // the input moves to a new line under the picture
+            this.scroll();
+        },
         // Freeze the current prompt line as a history line showing what was typed.
         echoCommand: function (cmd) {
             var line = this.open || this.newLine();
@@ -171,9 +202,9 @@
         btn.title = isRunning ? 'Stop the program (Ctrl+C in the terminal)' : 'Run the current file';
     }
 
-    function runOnServer(language, entry, compileOnly) {
+    function runOnServer(language, entry, compileOnly, pipArgs) {
         return new Promise(function (resolve) {
-            var result = { status: 'error', output: '', error: '', exit_code: null, reason: '', stdin_lines: 0 };
+            var result = { status: 'error', output: '', error: '', exit_code: null, reason: '', stdin_lines: 0, images: 0 };
             var proto = location.protocol === 'https:' ? 'wss' : 'ws';
             var ws = new WebSocket(proto + '://' + location.host + '/ws/run');
             var ended = false;
@@ -186,8 +217,10 @@
             term.focus();
 
             ws.onopen = function () {
-                send({ session_id: currentSession.sessionId, language: language, files: WS.list(),
-                       entry: entry, compile_only: !!compileOnly });
+                var msg = { session_id: currentSession.sessionId, language: language, files: WS.list(),
+                            entry: entry, compile_only: !!compileOnly };
+                if (pipArgs) { msg.action = 'pip'; msg.args = pipArgs; }
+                send(msg);
             };
             ws.onmessage = function (e) {
                 var ev;
@@ -198,6 +231,9 @@
                     term.write(ev.data, ev.stream === 'stderr' ? 'term-stderr' : '');
                     if (ev.stream === 'stderr') { if (result.error.length < 2000) result.error += ev.data; }
                     else if (result.output.length < 2000) result.output += ev.data;
+                } else if (ev.type === 'display') {
+                    result.images++;
+                    term.figure(ev.mime, ev.data, ev.name);
                 } else if (ev.type === 'exit') {
                     ended = true;
                     result.exit_code = ev.exit_code;
@@ -306,7 +342,7 @@
             var parts = v.split(/\s+/);
             var last = parts[parts.length - 1];
             var names = WS.names();
-            if (parts.length === 1) names = ['python', 'python3', 'gcc', 'g++', 'javac', 'java', 'node', 'ls', 'cat', 'clear', 'help', 'run', 'pwd', 'echo']
+            if (parts.length === 1) names = ['python', 'python3', 'pip', 'gcc', 'g++', 'javac', 'java', 'node', 'ls', 'cat', 'clear', 'help', 'run', 'pwd', 'echo']
                 .concat(Object.keys(this.built).map(function (n) { return './' + n; }));
             var hits = names.filter(function (n) { return n.indexOf(last) === 0; });
             if (hits.length === 1) {
@@ -351,7 +387,10 @@
 
             if (cmd === 'help') {
                 var lines = ['Available commands:'];
-                if (L === 'python') lines.push('  python <file.py>        run a Python file (type input when it asks)');
+                if (L === 'python') lines.push('  python <file.py>        run a Python file (type input when it asks)',
+                                               '  pip install <package>   install a package just for you (removed when you submit)',
+                                               '  pip list                show installed packages (numpy, pandas, matplotlib are ready)',
+                                               '  Charts (matplotlib, plt.show()) and turtle drawings appear here in the terminal.');
                 if (L === 'c') lines.push('  gcc <files.c> -o <name> compile C files', '  ./<name>                run the compiled program');
                 if (L === 'cpp') lines.push('  g++ <files.cpp> -o <name> compile C++ files', '  ./<name>                run the compiled program');
                 if (L === 'java') lines.push('  javac <files.java>      compile Java files', '  java <ClassName>        run a compiled class (e.g. java Main)');
@@ -382,6 +421,15 @@
             }
             if (cmd === 'run') return this.runCurrent(trigger);
 
+            var pipArgs = cmd === 'pip' || cmd === 'pip3' ? args
+                : ((cmd === 'python' || cmd === 'python3' || cmd === 'py') && args[0] === '-m' && (args[1] === 'pip' || args[1] === 'pip3') ? args.slice(2) : null);
+            if (pipArgs) {
+                if (L !== 'python') {
+                    term.write(cmd + ': installing packages is available in Python workspaces.\n', 'term-stderr');
+                    return false;
+                }
+                return this.pip(pipArgs, trigger);
+            }
             if (cmd === 'python' || cmd === 'python3' || cmd === 'py') {
                 if (L !== 'python') return this.unavailable(cmd);
                 var file = args[0];
@@ -485,6 +533,29 @@
             return true;
         },
 
+        // pip runs on the server in the student's own package folder (see sandbox.run_pip).
+        pip: async function (args, trigger) {
+            var started = Date.now();
+            var res;
+            try {
+                res = await runOnServer('python', null, false, args);
+            } catch (err) {
+                res = { status: 'error', output: '', error: String(err && err.message || err), exit_code: null, reason: '' };
+                term.write('pip failed: ' + res.error + '\n', 'term-stderr');
+            }
+            term.onProgramLine = term.onProgramEof = term.onProgramStop = null;
+            term.setMode('shell');
+            log('package_command', {
+                command: 'pip ' + args.slice(0, 16).join(' ').slice(0, 300),
+                duration: Date.now() - started,
+                execution_trigger: trigger,
+                result: res.status,
+                error_message: (res.error || '').substring(0, 200)
+            });
+            try { queueActivityBatchUpload(); } catch (e) { /* ignore */ }
+            return res.status === 'success';
+        },
+
         program: async function (language, entry, compileOnly, trigger) {
             var started = Date.now();
             currentSession.compilerClickCount = (currentSession.compilerClickCount || 0) + 1;
@@ -512,6 +583,7 @@
                 exit_code: res.exit_code,
                 stop_reason: res.reason || null,
                 stdin_lines: res.stdin_lines,
+                images_shown: res.images || 0,
                 output_summary: res.output.substring(0, 100) + (res.output.length > 100 ? '...' : ''),
                 error_message: res.error.substring(0, 100) + (res.error.length > 100 ? '...' : '')
             });

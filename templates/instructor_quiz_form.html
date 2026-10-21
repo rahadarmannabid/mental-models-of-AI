@@ -259,6 +259,20 @@
       font-size: 0.75rem; color: #fff; background: var(--primary); font-weight: 700; 
       padding: 4px 10px; border-radius: 12px; letter-spacing: 0.5px;
     }
+    .sq-top-left { display: flex; align-items: center; gap: 10px; }
+    .sq-drag-handle {
+      cursor: grab; user-select: none; color: var(--muted); font-size: 1.1rem; line-height: 1;
+      padding: 4px 6px; border-radius: 6px; letter-spacing: -2px;
+    }
+    .sq-drag-handle:hover { color: var(--text); background: var(--border); }
+    .sq-move-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--muted);
+      width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;
+    }
+    .sq-move-btn:hover:not(:disabled) { color: var(--text); border-color: var(--border-hover); }
+    .sq-move-btn:disabled { opacity: 0.35; cursor: default; }
+    .sq-card.sq-dragging { opacity: 0.45; border-style: dashed; }
+    .sq-drop-marker { height: 4px; margin: -10px 0 12px; border-radius: 2px; background: var(--primary); }
     .sq-fields { display: flex; flex-direction: column; gap: 16px; }
     .sq-row-inline { display: flex; gap: 12px; align-items: flex-start;}
     .sq-row-inline select { width: 200px; flex-shrink: 0; }
@@ -298,6 +312,18 @@
     .survey-tab:hover { color: var(--text); }
     .survey-tab.active { background: var(--primary-bg); color: var(--primary); }
     .survey-panel { display: none; animation: fadeUp 0.3s ease; }
+    .post-mode { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 18px; }
+    .post-mode label { display: flex; align-items: center; gap: 8px; font-weight: 500; color: var(--text); cursor: pointer; }
+    .post-cond-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .post-cond-tab {
+      padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); font-weight: 600; font-size: 0.85rem;
+      cursor: pointer; font-family: 'Inter', sans-serif;
+    }
+    .post-cond-tab.active { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
+    .post-cond-tab .post-cond-count { opacity: 0.7; font-weight: 500; margin-left: 4px; }
+    .post-cond-panel { display: none; }
+    .post-cond-panel.active { display: block; }
     .survey-panel.active { display: block; }
 
     /* ── Footer actions ── */
@@ -336,6 +362,8 @@
     }
     .toast.success { background: var(--success); }
     .toast.error { background: var(--danger); }
+    .toast.warning { background: var(--warning); color: #1f1300; }
+    .toast.info { background: var(--primary); }
     .toast.show { transform: translateY(0); opacity: 1; }
 
     /* ── Review list ── */
@@ -409,18 +437,15 @@
 
   <div class="card">
     <h2>Quiz Information</h2>
-    <p class="subtitle">Optional teaser shown to students when they start the quiz.</p>
 
     <div class="fg">
       <label for="teaser">Teaser</label>
-      <textarea id="teaser" rows="4" placeholder="Optional intro text or instructions shown when students start the quiz...">{{ quiz.teaser if quiz and quiz.teaser else '' }}</textarea>
-      <p class="hint">Leave empty to skip the teaser overlay. If provided, students will see this before they begin coding.</p>
+      <textarea id="teaser" rows="4" placeholder="Optional">{{ quiz.teaser if quiz and quiz.teaser else '' }}</textarea>
     </div>
   </div>
 
   <div class="card">
     <h2>Configuration</h2>
-    <p class="subtitle">Set up languages, timing, and availability.</p>
 
     <div class="fg">
       <label>Allowed Languages</label>
@@ -447,7 +472,6 @@
     <div class="fg">
       <label for="time_limit">Time Limit (minutes)</label>
       <input type="number" id="time_limit" min="0" placeholder="0 = unlimited" value="{{ quiz.time_limit_minutes if quiz else 0 }}">
-      <p class="hint">Leave as 0 if you don't want a strict timer.</p>
     </div>
 
     <div class="fg" style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
@@ -469,7 +493,6 @@
         </label>
         <span class="active-label">Allow copy/paste</span>
       </div>
-      <p class="hint">When disabled, students must type all code manually.</p>
     </div>
     <div class="fg">
       <div class="toggle-item">
@@ -479,14 +502,12 @@
         </label>
         <span class="active-label">Track tab switches</span>
       </div>
-      <p class="hint">Log when students switch away from or return to the tab. Students will see a warning when they return.</p>
     </div>
 
     <div class="fg" style="margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border);">
       <label class="chip {% if quiz and quiz.published %}selected{% endif %}" onclick="toggleChip(this)" style="display:inline-flex; border-color:var(--success-light); background:rgba(16,185,129,0.05);">
         <input type="checkbox" id="published" {% if quiz and quiz.published %}checked{% endif %}> 🚀 Publish immediately
       </label>
-      <p class="hint">Published quizzes can be accessed by students via the share link.</p>
     </div>
   </div>
 </div>
@@ -495,30 +516,29 @@
 <div class="step-panel" data-step="1">
   <div class="card">
     <h2>Experimental Conditions</h2>
-    <p class="subtitle">Select the AI assistance conditions you want to test. If multiple are chosen, students will be randomly assigned to one.</p>
+    <p class="subtitle">Pick more than one to assign students randomly.</p>
 
     {% set current_conds = quiz.conditions if quiz and quiz.conditions else [1] %}
     <div class="cond-grid">
       <div class="cond-card {% if 1 in current_conds %}selected{% endif %}" onclick="toggleCondition(1, this)">
         <div class="cond-num">1</div>
         <h3>No AI</h3>
-        <p>Students receive <strong>no AI assistance</strong>. Plain coding environment with no suggestions or chat.</p>
+        <p>No suggestions or chat.</p>
       </div>
       <div class="cond-card {% if 2 in current_conds %}selected{% endif %}" onclick="toggleCondition(2, this)">
         <div class="cond-num">2</div>
         <h3>Code Suggestion</h3>
-        <p>Students get <strong>inline ghost-text suggestions</strong> (single or multi-line) as they type, like GitHub Copilot. <kbd>Tab</kbd> accepts.</p>
+        <p>Inline suggestions as students type.</p>
       </div>
       <div class="cond-card {% if 3 in current_conds %}selected{% endif %}" onclick="toggleCondition(3, this)">
         <div class="cond-num">3</div>
         <h3>AI Agent</h3>
-        <p>Students chat with an <strong>AI coding agent</strong> that can read, add, modify and delete code, like Cursor. Modes: Ask, Agent, Plan, Debug.</p>
+        <p>Chat agent that can edit code.</p>
       </div>
     </div>
 
     <div class="skills-section" id="skillsSection" style="display:none;">
       <h3>Agent skills</h3>
-      <p class="subtitle">Optional instructions the agent follows for students in the AI Agent condition (e.g. "Explain every change in beginner terms"). Students can turn these on or off and add their own.</p>
       <div id="skillsList"></div>
       <button type="button" class="btn btn-secondary" style="margin-top:12px;" onclick="addSkill()">+ Add skill</button>
     </div>
@@ -539,16 +559,13 @@
 
     <div class="card">
       <h2 id="problemCardTitle">Problem 1</h2>
-      <p class="subtitle">Define what the student needs to solve.</p>
       
       <div class="fg">
         <label for="currentProblemTitle">Problem Title <span style="color:var(--danger)">*</span></label>
         <input type="text" id="currentProblemTitle" placeholder="e.g., Intro to Variables, Loops Practice" required>
-        <p class="hint">Shown in the student's Problem panel and problem tabs. Required for each problem.</p>
       </div>
       <div class="fg">
         <label>Problem Statement <span style="color:var(--danger)">*</span></label>
-        <p class="hint" style="margin-bottom:8px;">Use the toolbar for bold, italic, colors, lists, links, and horizontal rules. Shown to students as formatted text.</p>
         <div class="rich-editor-wrap" id="wrapProblemStatement"><div id="editorProblemStatement"></div></div>
       </div>
       <div class="fg">
@@ -563,7 +580,6 @@
 
     <div class="card">
       <h2>Starter Code (Boilerplate)</h2>
-      <p class="subtitle">Provide the initial files for each allowed language.</p>
       <div class="code-tabs" id="codeTabs"></div>
       <div class="starter-files-wrap">
         <div id="starterFilesContainer"></div>
@@ -573,7 +589,6 @@
 
     <div class="card" id="problemSurveysCard">
       <h2 id="surveysCardTitle">Surveys for Problem 1</h2>
-      <p class="subtitle">Enable/disable and customize surveys shown to participants for this problem.</p>
 
       <div class="toggle-row">
         <div class="toggle-item">
@@ -607,12 +622,56 @@
 
       <div class="survey-panel active" id="panel-prob-pre">
         <div id="probPreSurveyList"></div>
-        <button class="add-btn" onclick="addSurveyQuestion('probPreSurveyList')">+ Add Pre-Survey Question</button>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="add-btn" onclick="addSurveyQuestion('probPreSurveyList')">+ Add Pre-Survey Question</button>
+          <button class="add-btn" type="button" onclick="addDemographicQuestions('probPreSurveyList')">+ Demographics</button>
+        </div>
       </div>
 
       <div class="survey-panel" id="panel-prob-post">
-        <div id="probPostSurveyList"></div>
-        <button class="add-btn" onclick="addSurveyQuestion('probPostSurveyList')">+ Add Post-Survey Question</button>
+        <div class="post-mode">
+          <label><input type="radio" name="postSurveyMode" value="same" onchange="onPostModeChange()"> Same questions for every condition</label>
+          <label><input type="radio" name="postSurveyMode" value="per_condition" onchange="onPostModeChange()"> Different questions per condition</label>
+        </div>
+        <div id="postSameWrap">
+          <div id="probPostSurveyList"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="add-btn" onclick="addSurveyQuestion('probPostSurveyList')">+ Add Post-Survey Question</button>
+            <button class="add-btn" type="button" onclick="addPresetQuestions('probPostSurveyList', 'post_autocomplete')">+ Code suggestion set</button>
+            <button class="add-btn" type="button" onclick="addPresetQuestions('probPostSurveyList', 'post_agent')">+ AI agent set</button>
+          </div>
+        </div>
+        <div id="postPerCondWrap" style="display:none;">
+          <div class="post-cond-tabs" id="postCondTabs">
+            <button type="button" class="post-cond-tab" data-cond="1" onclick="switchPostCondTab(1)">No AI</button>
+            <button type="button" class="post-cond-tab" data-cond="2" onclick="switchPostCondTab(2)">Code Suggestion</button>
+            <button type="button" class="post-cond-tab" data-cond="3" onclick="switchPostCondTab(3)">AI Agent</button>
+          </div>
+          <div class="post-cond-panel" data-cond="1">
+            <div id="probPostSurveyList_c1"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="add-btn" onclick="addSurveyQuestion('probPostSurveyList_c1')">+ Add Post-Survey Question</button>
+            <button class="add-btn" type="button" onclick="addPresetQuestions('probPostSurveyList_c1', 'post_autocomplete')">+ Code suggestion set</button>
+            <button class="add-btn" type="button" onclick="addPresetQuestions('probPostSurveyList_c1', 'post_agent')">+ AI agent set</button>
+          </div>
+          </div>
+          <div class="post-cond-panel" data-cond="2">
+            <div id="probPostSurveyList_c2"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="add-btn" onclick="addSurveyQuestion('probPostSurveyList_c2')">+ Add Post-Survey Question</button>
+            <button class="add-btn" type="button" onclick="addPresetQuestions('probPostSurveyList_c2', 'post_autocomplete')">+ Code suggestion set</button>
+            <button class="add-btn" type="button" onclick="addPresetQuestions('probPostSurveyList_c2', 'post_agent')">+ AI agent set</button>
+          </div>
+          </div>
+          <div class="post-cond-panel" data-cond="3">
+            <div id="probPostSurveyList_c3"></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="add-btn" onclick="addSurveyQuestion('probPostSurveyList_c3')">+ Add Post-Survey Question</button>
+            <button class="add-btn" type="button" onclick="addPresetQuestions('probPostSurveyList_c3', 'post_autocomplete')">+ Code suggestion set</button>
+            <button class="add-btn" type="button" onclick="addPresetQuestions('probPostSurveyList_c3', 'post_agent')">+ AI agent set</button>
+          </div>
+          </div>
+        </div>
       </div>
 
       <div class="survey-panel" id="panel-prob-recurrent">
@@ -641,7 +700,6 @@
 <div class="step-panel" data-step="3">
   <div class="card">
     <h2>Review Your Quiz</h2>
-    <p class="subtitle">Double-check settings before saving to the database.</p>
     <div style="background:var(--input-bg); border:1px solid var(--border); border-radius:8px; padding:24px;">
       <dl class="review-grid" id="reviewContent"></dl>
     </div>
@@ -691,6 +749,7 @@
 {% endif %}
 
 <script src="https://cdn.quilljs.com/1.3.7/quill.min.js"></script>
+<script src="/static/ui-motion.js"></script>
 <script>
 const bootstrap = JSON.parse(document.getElementById('quiz-form-bootstrap').textContent);
 const EDIT_MODE = bootstrap.edit_mode;
@@ -822,6 +881,9 @@ let activeCodeLang = null;
 let DEFAULT_PRE_SURVEY = [];
 let DEFAULT_POST_SURVEY = [];
 let DEFAULT_RECURRENT_SURVEY = [];
+// Per-condition post-survey defaults: 1 = No AI, 2 = code suggestion, 3 = AI agent
+let DEFAULT_POST_BY_CONDITION = { 1: [], 2: [], 3: [] };
+const POST_CONDITIONS = [1, 2, 3];
 
 async function loadDefaultSurveyTemplates() {
   const base = '/instructor/default-survey-templates';
@@ -834,6 +896,34 @@ async function loadDefaultSurveyTemplates() {
   DEFAULT_PRE_SURVEY = Array.isArray(pre) ? pre : [];
   DEFAULT_POST_SURVEY = Array.isArray(post) ? post : [];
   DEFAULT_RECURRENT_SURVEY = Array.isArray(rec) ? rec : [];
+  const [ac, ag] = await Promise.all([
+    loadPresetQuestions('post_autocomplete').catch(() => []),
+    loadPresetQuestions('post_agent').catch(() => []),
+  ]);
+  DEFAULT_POST_BY_CONDITION = { 1: [], 2: ac, 3: ag };
+}
+
+const PRESET_QUESTIONS = {};
+
+/** Question sets in surveys/ served by /instructor/default-survey-templates/{name}; cached. */
+async function loadPresetQuestions(name) {
+  if (!PRESET_QUESTIONS[name]) {
+    const r = await fetch('/instructor/default-survey-templates/' + name, { credentials: 'same-origin' });
+    if (!r.ok) throw new Error(name + ' template');
+    const data = await r.json();
+    PRESET_QUESTIONS[name] = Array.isArray(data) ? data : [];
+  }
+  return JSON.parse(JSON.stringify(PRESET_QUESTIONS[name]));
+}
+
+/** {1: [...], 2: [...], 3: [...]} from saved data; Firebase may return it as an array or drop empty lists. */
+function normalizePostByCondition(raw) {
+  const out = {};
+  POST_CONDITIONS.forEach(c => {
+    const v = raw ? raw[c] ?? raw[String(c)] : null;
+    out[c] = Array.isArray(v) ? v : [];
+  });
+  return out;
 }
 
 function surveyQuestionImageUrl(src) {
@@ -912,6 +1002,8 @@ function defaultSurveyFields() {
     pre_survey: JSON.parse(JSON.stringify(DEFAULT_PRE_SURVEY)),
     post_survey_enabled: true,
     post_survey: JSON.parse(JSON.stringify(DEFAULT_POST_SURVEY)),
+    post_survey_mode: 'per_condition',
+    post_survey_by_condition: JSON.parse(JSON.stringify(DEFAULT_POST_BY_CONDITION)),
     recurrent_survey_enabled: true,
     recurrent_survey: JSON.parse(JSON.stringify(DEFAULT_RECURRENT_SURVEY)),
     recurrent_survey_interval: 4,
@@ -963,6 +1055,11 @@ document.addEventListener('DOMContentLoaded', async () => {
       pre_survey: hasSurveys ? (prob.pre_survey || []) : (quizPre.length ? quizPre : defaults.pre_survey),
       post_survey_enabled: hasSurveys ? (prob.post_survey_enabled !== false) : (quizPost.length ? true : defaults.post_survey_enabled),
       post_survey: hasSurveys ? (prob.post_survey || []) : (quizPost.length ? quizPost : defaults.post_survey),
+      // Quizzes saved before per-condition post-surveys use one list for everyone
+      post_survey_mode: prob.post_survey_mode === 'per_condition' ? 'per_condition' : 'same',
+      post_survey_by_condition: prob.post_survey_by_condition
+        ? normalizePostByCondition(prob.post_survey_by_condition)
+        : defaults.post_survey_by_condition,
       recurrent_survey_enabled: hasSurveys ? (prob.recurrent_survey_enabled !== false) : (quizRec.length ? true : defaults.recurrent_survey_enabled),
       recurrent_survey: hasSurveys ? (prob.recurrent_survey || []) : (quizRec.length ? quizRec : defaults.recurrent_survey),
       recurrent_survey_interval: hasSurveys ? (prob.recurrent_survey_interval || 4) : (quizRec.length ? quizRecInterval : defaults.recurrent_survey_interval),
@@ -1016,6 +1113,7 @@ function toggleCondition(n, el) {
 // Agent skills (condition 3)
 function updateSkillsVisibility() {
   document.getElementById('skillsSection').style.display = selectedConditions.includes(3) ? '' : 'none';
+  if (document.getElementById('postCondTabs')) refreshPostCondTabs();
 }
 function renderSkills() {
   const list = document.getElementById('skillsList');
@@ -1023,14 +1121,33 @@ function renderSkills() {
     <div class="skill-row">
       <div class="skill-row__head">
         <input type="text" maxlength="60" placeholder="Skill name, e.g. Beginner explanations" value="${escHtml(s.name)}" oninput="agentSkills[${i}].name = this.value">
-        <button type="button" class="skill-row__remove" onclick="removeSkill(${i})">Remove</button>
+        <button type="button" class="skill-row__remove" onclick="removeSkill(${i}, this)">Remove</button>
       </div>
       <textarea maxlength="4000" placeholder="Instructions the agent should follow..." oninput="agentSkills[${i}].instructions = this.value">${escHtml(s.instructions)}</textarea>
     </div>`).join('');
 }
 function addSkill() { agentSkills.push({ name: '', instructions: '' }); renderSkills(); }
-function removeSkill(i) { agentSkills.splice(i, 1); renderSkills(); }
+async function removeSkill(i, btn) {
+  const s = agentSkills[i] || {};
+  if ((s.name || '').trim() || (s.instructions || '').trim()) {
+    const ok = await UIMotion.confirm({ title: 'Remove this skill?', message: 'Students in the coding agent condition will no longer get it.', item: s.name || '(unnamed skill)', confirmText: 'Remove' });
+    if (!ok) return;
+  }
+  const row = btn && btn.closest('.skill-row');
+  if (row) await UIMotion.remove(row);
+  agentSkills.splice(i, 1);
+  renderSkills();
+}
 document.addEventListener('DOMContentLoaded', () => { renderSkills(); updateSkillsVisibility(); });
+window.addEventListener('load', () => {
+  new MutationObserver(muts => {
+    const added = [];
+    muts.forEach(m => m.addedNodes.forEach(n => {
+      if (n.nodeType === 1 && n.matches('.sq-card, .sq-option-row, .starter-file-card')) added.push(n);
+    }));
+    if (added.length && added.length <= 3) UIMotion.enter(added, { distance: 6 });  // not on full re-renders
+  }).observe(document.body, { childList: true, subtree: true });
+});
 
 // Problem Tabs
 function renderProblemTabs() {
@@ -1077,6 +1194,8 @@ function saveCurrentProblem() {
     pre_survey: collectSurvey('probPreSurveyList'),
     post_survey_enabled: document.getElementById('togglePostSurvey').checked,
     post_survey: collectSurvey('probPostSurveyList'),
+    post_survey_mode: getPostMode(),
+    post_survey_by_condition: Object.fromEntries(POST_CONDITIONS.map(c => [String(c), collectSurvey('probPostSurveyList_c' + c)])),
     recurrent_survey_enabled: document.getElementById('toggleRecurrentSurvey').checked,
     recurrent_survey: collectSurvey('probRecurrentSurveyList'),
     recurrent_survey_interval: parseInt(document.getElementById('probRecurrentInterval').value) || 4,
@@ -1115,6 +1234,9 @@ function switchProblem(idx) {
   document.getElementById('probRecurrentInterval').value = prob.recurrent_survey_interval || 4;
   renderSurveyList('probPreSurveyList', prob.pre_survey || []);
   renderSurveyList('probPostSurveyList', prob.post_survey || []);
+  const postByCond = normalizePostByCondition(prob.post_survey_by_condition);
+  POST_CONDITIONS.forEach(c => renderSurveyList('probPostSurveyList_c' + c, postByCond[c]));
+  setPostMode(prob.post_survey_mode === 'per_condition' ? 'per_condition' : 'same');
   renderSurveyList('probRecurrentSurveyList', prob.recurrent_survey || []);
   onSurveyToggle();
 
@@ -1138,12 +1260,26 @@ function addProblem() {
   switchProblem(problemsData.length - 1);
 }
 
-function removeCurrentProblem() {
+async function removeCurrentProblem() {
   if (problemsData.length <= 1) { showToast('At least one problem is required.', 'error'); return; }
+  saveCurrentProblem();
+  const p = problemsData[currentProblemIndex] || {};
+  const ok = await UIMotion.confirm({
+    title: 'Delete problem ' + (currentProblemIndex + 1) + '?',
+    message: 'Its statement, starter code and surveys are removed from this quiz.',
+    item: (p.title || '').trim() || ('Problem ' + (currentProblemIndex + 1)),
+    confirmText: 'Delete problem',
+  });
+  if (!ok) return;
+  const tab = document.querySelectorAll('#problemTabBar .prob-tab')[currentProblemIndex];
+  if (tab) await UIMotion.remove(tab, { direction: 'up' });
   problemsData.splice(currentProblemIndex, 1);
   const newIdx = Math.min(currentProblemIndex, problemsData.length - 1);
   currentProblemIndex = newIdx;
+  // The form still shows the deleted problem: don't let switchProblem save it over the next one.
+  problemRendered = false;
   switchProblem(newIdx);
+  showToast('Problem deleted. Save the quiz to keep this change.', 'success');
 }
 
 // Starter Code
@@ -1208,7 +1344,7 @@ function createFileCard(file, idx) {
   card.innerHTML = `
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">
       <input type="text" class="starter-filename" value="${escHtml(file.filename || '')}" placeholder="filename.ext" style="flex:1;font-family:'Fira Code',monospace;">
-      <button class="remove-btn" onclick="this.closest('.starter-file-card').remove()" title="Remove file">✕</button>
+      <button class="remove-btn" onclick="UIMotion.remove(this.closest('.starter-file-card'))" title="Remove file">✕</button>
     </div>
     <textarea class="starter-file-content code-area" placeholder="// Write starter code here...">${escHtml(file.content || '')}</textarea>
   `;
@@ -1234,6 +1370,41 @@ function switchProblemSurveyTab(name, btn) {
   document.querySelectorAll('#problemSurveysCard .survey-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('panel-prob-' + name).classList.add('active');
+}
+
+// Post-survey: one list for everyone, or one per study condition
+function getPostMode() {
+  const r = document.querySelector('input[name="postSurveyMode"]:checked');
+  return r ? r.value : 'same';
+}
+
+function setPostMode(mode) {
+  document.querySelectorAll('input[name="postSurveyMode"]').forEach(r => { r.checked = r.value === mode; });
+  onPostModeChange();
+}
+
+function onPostModeChange() {
+  const per = getPostMode() === 'per_condition';
+  document.getElementById('postSameWrap').style.display = per ? 'none' : '';
+  document.getElementById('postPerCondWrap').style.display = per ? '' : 'none';
+  refreshPostCondTabs();
+}
+
+/** Show a tab only for the conditions selected in step 2. */
+function refreshPostCondTabs() {
+  let active = null;
+  document.querySelectorAll('#postCondTabs .post-cond-tab').forEach(tab => {
+    const c = parseInt(tab.dataset.cond, 10);
+    const on = selectedConditions.includes(c);
+    tab.style.display = on ? '' : 'none';
+    if (on && tab.classList.contains('active')) active = c;
+  });
+  switchPostCondTab(active || selectedConditions[0] || 1);
+}
+
+function switchPostCondTab(cond) {
+  document.querySelectorAll('#postCondTabs .post-cond-tab').forEach(t => t.classList.toggle('active', parseInt(t.dataset.cond, 10) === cond));
+  document.querySelectorAll('#postPerCondWrap .post-cond-panel').forEach(p => p.classList.toggle('active', parseInt(p.dataset.cond, 10) === cond));
 }
 
 function onSurveyToggle() {
@@ -1272,7 +1443,103 @@ function renderSurveyList(containerId, questions) {
   questions.forEach((q, i) => {
     el.appendChild(createSurveyCard(q, i));
   });
+  renumberSurveyCards(el);
 }
+
+// ── Reordering survey questions (drag the ⋮⋮ handle, or use ↑ / ↓) ──
+// collectSurvey() reads cards in DOM order, so moving a card is all a reorder needs.
+
+function renumberSurveyCards(list) {
+  const cards = Array.from(list.querySelectorAll(':scope > .sq-card'));
+  cards.forEach((card, i) => {
+    card.dataset.idx = i;
+    const badge = card.querySelector('.sq-badge');
+    if (badge) badge.textContent = `Question ${i + 1}`;
+    const up = card.querySelector('.sq-move-up');
+    const down = card.querySelector('.sq-move-down');
+    if (up) up.disabled = i === 0;
+    if (down) down.disabled = i === cards.length - 1;
+  });
+}
+
+function moveSurveyCard(btn, dir) {
+  const card = btn.closest('.sq-card');
+  const list = card.parentElement;
+  if (dir < 0 && card.previousElementSibling) list.insertBefore(card, card.previousElementSibling);
+  else if (dir > 0 && card.nextElementSibling) list.insertBefore(card.nextElementSibling, card);
+  renumberSurveyCards(list);
+  card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  btn.focus();
+}
+
+async function removeSurveyCard(btn) {
+  const card = btn.closest('.sq-card');
+  const list = card.parentElement;
+  const textEl = card.querySelector('.sq-question');
+  const text = textEl ? (textEl.value || '').trim() : '';
+  if (text) {
+    const ok = await UIMotion.confirm({ title: 'Remove this question?', message: 'Its settings and options are removed from the survey.', item: text.length > 120 ? text.slice(0, 117) + '…' : text, confirmText: 'Remove' });
+    if (!ok) return;
+  }
+  await UIMotion.remove(card);
+  renumberSurveyCards(list);
+}
+
+function enableSurveyDragSort(list) {
+  let dragged = null;
+  const marker = document.createElement('div');
+  marker.className = 'sq-drop-marker';
+
+  // Cards become draggable only while the handle is held, so text in inputs can still be selected.
+  list.addEventListener('pointerdown', (e) => {
+    const handle = e.target.closest('.sq-drag-handle');
+    const card = handle && handle.closest('.sq-card');
+    if (card && card.parentElement === list) card.draggable = true;
+  });
+  list.addEventListener('pointerup', () => {
+    list.querySelectorAll(':scope > .sq-card[draggable="true"]').forEach(c => { if (c !== dragged) c.draggable = false; });
+  });
+  list.addEventListener('dragstart', (e) => {
+    const card = e.target.closest && e.target.closest('.sq-card');
+    if (!card || card.parentElement !== list || !card.draggable) return;
+    dragged = card;
+    e.dataTransfer.effectAllowed = 'move';
+    try { e.dataTransfer.setData('text/plain', ''); } catch (err) { /* Firefox needs data set */ }
+    requestAnimationFrame(() => card.classList.add('sq-dragging'));
+  });
+  list.addEventListener('dragover', (e) => {
+    if (!dragged) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const cards = Array.from(list.querySelectorAll(':scope > .sq-card')).filter(c => c !== dragged);
+    const before = cards.find(c => {
+      const r = c.getBoundingClientRect();
+      return e.clientY < r.top + r.height / 2;
+    });
+    if (before) list.insertBefore(marker, before);
+    else list.appendChild(marker);
+  });
+  list.addEventListener('drop', (e) => {
+    if (!dragged) return;
+    e.preventDefault();
+    if (marker.parentElement === list) list.insertBefore(dragged, marker);
+  });
+  list.addEventListener('dragend', () => {
+    if (!dragged) return;
+    marker.remove();
+    dragged.classList.remove('sq-dragging');
+    dragged.draggable = false;
+    dragged = null;
+    renumberSurveyCards(list);
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  ['probPreSurveyList', 'probPostSurveyList', 'probPostSurveyList_c1', 'probPostSurveyList_c2', 'probPostSurveyList_c3', 'probRecurrentSurveyList'].forEach(id => {
+    const list = document.getElementById(id);
+    if (list) enableSurveyDragSort(list);
+  });
+});
 
 function createSurveyCard(q, idx) {
   const card = document.createElement('div');
@@ -1280,20 +1547,25 @@ function createSurveyCard(q, idx) {
   card.dataset.idx = idx;
   card.dataset.meta = JSON.stringify(q);
 
-  const typeOptions = ['likert','likert_7_with_na','multiple_choice','open_ended','slider','info_block']
-    .map(t => `<option value="${t}" ${q.type===t?'selected':''}>${t.replace(/_/g,' ')}</option>`).join('');
+  const typeOptions = SURVEY_TYPES
+    .map(t => `<option value="${t}" ${q.type===t?'selected':''}>${SURVEY_TYPE_LABELS[t] || t.replace(/_/g,' ')}</option>`).join('');
 
   const isRequired = q.required !== false;
   const minLen = q.min_length || 0;
 
   let html = `
     <div class="sq-top">
-      <span class="sq-badge">Question ${idx+1}</span>
+      <div class="sq-top-left">
+        <span class="sq-drag-handle" title="Drag to reorder">⋮⋮</span>
+        <span class="sq-badge">Question ${idx+1}</span>
+      </div>
       <div style="display:flex;align-items:center;gap:12px;">
+        <button type="button" class="sq-move-btn sq-move-up" title="Move up" onclick="moveSurveyCard(this, -1)">↑</button>
+        <button type="button" class="sq-move-btn sq-move-down" title="Move down" onclick="moveSurveyCard(this, 1)">↓</button>
         <label style="display:flex;align-items:center;gap:6px;font-size:0.85rem;color:var(--muted);cursor:pointer;">
           <input type="checkbox" class="sq-required" ${isRequired ? 'checked' : ''}> Required
         </label>
-        <button class="remove-btn" style="width:28px;height:28px;font-size:0.9rem;" title="Remove Question" onclick="this.closest('.sq-card').remove()">✕</button>
+        <button class="remove-btn" style="width:28px;height:28px;font-size:0.9rem;" title="Remove Question" onclick="removeSurveyCard(this)">✕</button>
       </div>
     </div>
     <div class="sq-fields">
@@ -1301,8 +1573,9 @@ function createSurveyCard(q, idx) {
         <input type="text" class="sq-question" placeholder="Enter question text" value="${escHtml(q.question || '')}">
         <select class="sq-type" onchange="onTypeChange(this)">${typeOptions}</select>
       </div>
+      <input type="text" class="sq-help" placeholder="Help text (optional)" value="${escHtml(q.help_text || '')}" style="margin-top:8px;width:100%;padding:8px;font-size:0.85rem;">
       <div class="sq-image-row" style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);">
-        <label style="font-size:0.8rem;color:var(--muted);display:block;margin-bottom:6px;">Optional image — <strong>Upload</strong> (stored with this quiz) or type a shared file name from <code>surveys/images/</code></label>
+        <label style="font-size:0.8rem;color:var(--muted);display:block;margin-bottom:6px;">Image (optional)</label>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
           <input type="text" class="sq-image-src" placeholder="quiz asset id/filename.png or shared image.png" value="${q.image && q.image.src ? escHtml(q.image.src) : ''}" style="flex:1;min-width:160px;padding:8px;">
           <input type="file" class="sq-image-file" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" style="display:none">
@@ -1317,15 +1590,12 @@ function createSurveyCard(q, idx) {
     </div>`;
   }
 
-  if (q.type === 'multiple_choice' && q.options && q.options.length) {
-    html += '<div class="sq-options">';
-    q.options.forEach((opt, oi) => {
-      html += `<div class="sq-option-row"><span style="color:var(--dim);font-size:0.9rem;min-width:24px;font-weight:600;">${String.fromCharCode(65+oi)}.</span><input type="text" class="sq-opt-input" value="${escHtml(opt)}"><button class="remove-btn" style="width:28px;height:28px;font-size:0.9rem;" onclick="this.parentElement.remove()">✕</button></div>`;
-    });
-    html += `<button class="action-btn-sm" onclick="addOption(this)" style="margin-top:8px;">+ Add Option</button></div>`;
-  } else if (q.type === 'multiple_choice') {
-    html += `<div class="sq-options"><button class="action-btn-sm" onclick="addOption(this)">+ Add Option</button></div>`;
+  if (q.type === 'diagram') {
+    html += diagramConfigHtml(q.diagram);
   }
+
+  if (CHOICE_TYPES.includes(q.type)) html += choiceOptionsHtml(q);
+  if (q.type === 'matrix') html += matrixConfigHtml(q);
 
   html += '</div>';
   card.innerHTML = html;
@@ -1336,16 +1606,26 @@ function createSurveyCard(q, idx) {
 
 function onTypeChange(sel) {
   const card = sel.closest('.sq-card');
-  let optDiv = card.querySelector('.sq-options');
-  if (sel.value === 'multiple_choice') {
+  const optDiv = card.querySelector('.sq-options');
+  if (CHOICE_TYPES.includes(sel.value)) {
     if (!optDiv) {
-      optDiv = document.createElement('div');
-      optDiv.className = 'sq-options';
-      optDiv.innerHTML = '<button class="action-btn-sm" onclick="addOption(this)">+ Add Option</button>';
-      card.querySelector('.sq-fields').appendChild(optDiv);
+      const holder = document.createElement('div');
+      holder.innerHTML = choiceOptionsHtml({});
+      card.querySelector('.sq-fields').appendChild(holder.firstElementChild);
     }
-  } else {
-    if (optDiv) optDiv.remove();
+  } else if (optDiv) {
+    optDiv.remove();
+  }
+
+  const matrixRow = card.querySelector('.sq-matrix-row');
+  if (sel.value === 'matrix') {
+    if (!matrixRow) {
+      const holder = document.createElement('div');
+      holder.innerHTML = matrixConfigHtml({});
+      card.querySelector('.sq-fields').appendChild(holder.firstElementChild);
+    }
+  } else if (matrixRow) {
+    matrixRow.remove();
   }
   
   let minRow = card.querySelector('.sq-minlen-row');
@@ -1361,6 +1641,108 @@ function onTypeChange(sel) {
   } else {
     if (minRow) minRow.remove();
   }
+
+  let diagramRow = card.querySelector('.sq-diagram-row');
+  if (sel.value === 'diagram') {
+    if (!diagramRow) {
+      const holder = document.createElement('div');
+      holder.innerHTML = diagramConfigHtml(null);
+      card.querySelector('.sq-fields').appendChild(holder.firstElementChild);
+    }
+  } else if (diagramRow) {
+    diagramRow.remove();
+  }
+}
+
+const SURVEY_TYPES = ['likert', 'likert_7_with_na', 'multiple_choice', 'checkboxes', 'matrix', 'open_ended', 'slider', 'diagram', 'info_block'];
+const SURVEY_TYPE_LABELS = {
+  likert: 'likert', likert_7_with_na: 'likert 7 with N/A', multiple_choice: 'multiple choice',
+  checkboxes: 'checkboxes', matrix: 'grid', open_ended: 'open ended', slider: 'slider',
+  diagram: 'diagram', info_block: 'info block'
+};
+const CHOICE_TYPES = ['multiple_choice', 'checkboxes'];
+
+/** Option list for multiple choice / checkboxes, plus the "Other (please specify)" toggle. */
+function choiceOptionsHtml(q) {
+  const opts = Array.isArray(q.options) ? q.options : [];
+  const rows = opts.map((opt, oi) =>
+    `<div class="sq-option-row"><span style="color:var(--dim);font-size:0.9rem;min-width:24px;font-weight:600;">${String.fromCharCode(65+oi)}.</span><input type="text" class="sq-opt-input" value="${escHtml(opt)}"><button class="remove-btn" style="width:28px;height:28px;font-size:0.9rem;" onclick="UIMotion.remove(this.parentElement)">✕</button></div>`).join('');
+  return `<div class="sq-options">${rows}<button class="action-btn-sm" onclick="addOption(this)" style="margin-top:8px;">+ Add Option</button>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:10px;font-size:0.85rem;color:var(--muted);cursor:pointer;">
+      <input type="checkbox" class="sq-allow-other" ${q.allow_other ? 'checked' : ''}> Add “Other (please specify)” with a text box
+    </label></div>`;
+}
+
+/** Rows (items) and columns (shared answer choices) for a matrix question, one per line. */
+function matrixConfigHtml(q) {
+  const lbl = 'font-size:0.8rem;color:var(--muted);display:block;margin-bottom:4px;';
+  const rows = Array.isArray(q.rows) ? q.rows.join('\n') : '';
+  const cols = Array.isArray(q.columns) ? q.columns.join('\n') : 'Never\nRarely\nSometimes\nOften\nVery often';
+  return `<div class="sq-matrix-row" style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);display:flex;gap:12px;flex-wrap:wrap;">
+    <label style="flex:1;min-width:200px;"><span style="${lbl}">Rows (one per line)</span>
+      <textarea class="sq-matrix-rows" rows="5" style="width:100%;padding:8px;">${escHtml(rows)}</textarea></label>
+    <label style="flex:1;min-width:200px;"><span style="${lbl}">Columns (one per line)</span>
+      <textarea class="sq-matrix-cols" rows="5" style="width:100%;padding:8px;">${escHtml(cols)}</textarea></label>
+  </div>`;
+}
+
+function linesOf(el) {
+  return el ? el.value.split('\n').map(x => x.trim()).filter(Boolean) : [];
+}
+
+const DIAGRAM_TOOL_LABELS = { canvas: 'Canvas (shapes, arrows, pen)', mermaid: 'Mermaid code', upload: 'Image upload' };
+const DIAGRAM_TYPE_LABELS = {
+  '': 'Any diagram', flowchart: 'Flowchart', sequence: 'Sequence diagram', class: 'Class diagram',
+  state: 'State diagram', er: 'Entity-relationship diagram'
+};
+
+/** Settings panel for a "diagram" question: allowed tools, first tool, diagram type, instructions, Mermaid starter. */
+function diagramConfigHtml(cfg) {
+  cfg = cfg || {};
+  // "boxes" (boxes & arrows) was merged into the canvas.
+  const tools = Array.isArray(cfg.tools) && cfg.tools.length
+    ? cfg.tools.map(t => t === 'boxes' ? 'canvas' : t)
+    : Object.keys(DIAGRAM_TOOL_LABELS);
+  const firstTool = cfg.default_tool === 'boxes' ? 'canvas' : cfg.default_tool;
+  const toolChecks = Object.keys(DIAGRAM_TOOL_LABELS).map(t =>
+    `<label style="display:inline-flex;align-items:center;gap:6px;margin-right:14px;font-size:0.85rem;cursor:pointer;">
+      <input type="checkbox" class="sq-dg-tool" value="${t}" ${t === 'upload' ? 'checked disabled' : (tools.includes(t) ? 'checked' : '')}> ${DIAGRAM_TOOL_LABELS[t]}${t === 'upload' ? ' (always on)' : ''}
+    </label>`).join('');
+  const firstOpts = Object.keys(DIAGRAM_TOOL_LABELS).map(t =>
+    `<option value="${t}" ${firstTool === t ? 'selected' : ''}>${DIAGRAM_TOOL_LABELS[t]}</option>`).join('');
+  const typeOpts = Object.keys(DIAGRAM_TYPE_LABELS).map(t =>
+    `<option value="${t}" ${(cfg.diagram_type || '') === t ? 'selected' : ''}>${DIAGRAM_TYPE_LABELS[t]}</option>`).join('');
+  const lbl = 'font-size:0.8rem;color:var(--muted);display:block;margin-bottom:4px;';
+  return `<div class="sq-diagram-row" style="margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);display:flex;flex-direction:column;gap:10px;">
+    <div><span style="${lbl}">Tools</span>${toolChecks}</div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+      <label style="flex:1;min-width:180px;"><span style="${lbl}">Open first with</span><select class="sq-dg-default" style="width:100%;padding:8px;">${firstOpts}</select></label>
+      <label style="flex:1;min-width:180px;"><span style="${lbl}">Diagram type</span><select class="sq-dg-type" style="width:100%;padding:8px;">${typeOpts}</select></label>
+    </div>
+    <label><span style="${lbl}">Instructions (optional)</span>
+      <textarea class="sq-dg-instructions" rows="2" style="width:100%;padding:8px;">${escHtml(cfg.instructions || '')}</textarea></label>
+    <label><span style="${lbl}">Mermaid starter code (optional)</span>
+      <textarea class="sq-dg-starter" rows="3" style="width:100%;padding:8px;font-family:monospace;" placeholder="flowchart TD&#10;    A --> B">${escHtml(cfg.starter_mermaid || '')}</textarea></label>
+  </div>`;
+}
+
+function readDiagramConfig(card) {
+  // Students can always upload a photo instead of drawing.
+  let tools = Array.from(card.querySelectorAll('.sq-dg-tool:checked')).map(cb => cb.value).filter(t => t !== 'upload');
+  if (!tools.length) tools = Object.keys(DIAGRAM_TOOL_LABELS).filter(t => t !== 'upload');
+  tools.push('upload');
+  const def = card.querySelector('.sq-dg-default');
+  const type = card.querySelector('.sq-dg-type');
+  const instr = card.querySelector('.sq-dg-instructions');
+  const starter = card.querySelector('.sq-dg-starter');
+  const defaultTool = def && tools.includes(def.value) ? def.value : tools[0];
+  return {
+    tools: tools,
+    default_tool: defaultTool,
+    diagram_type: type ? type.value : '',
+    instructions: instr ? instr.value.trim() : '',
+    starter_mermaid: starter ? starter.value : ''
+  };
 }
 
 function addOption(btn) {
@@ -1368,20 +1750,63 @@ function addOption(btn) {
   const count = container.querySelectorAll('.sq-option-row').length;
   const row = document.createElement('div');
   row.className = 'sq-option-row';
-  row.innerHTML = `<span style="color:var(--dim);font-size:0.9rem;min-width:24px;font-weight:600;">${String.fromCharCode(65+count)}.</span><input type="text" class="sq-opt-input" placeholder="Option ${String.fromCharCode(65+count)}"><button class="remove-btn" style="width:28px;height:28px;font-size:0.9rem;" onclick="this.parentElement.remove()">✕</button>`;
+  row.innerHTML = `<span style="color:var(--dim);font-size:0.9rem;min-width:24px;font-weight:600;">${String.fromCharCode(65+count)}.</span><input type="text" class="sq-opt-input" placeholder="Option ${String.fromCharCode(65+count)}"><button class="remove-btn" style="width:28px;height:28px;font-size:0.9rem;" onclick="UIMotion.remove(this.parentElement)">✕</button>`;
   container.insertBefore(row, btn);
+}
+
+const PRESET_LABELS = { demographics: 'demographic', post_autocomplete: 'code suggestion', post_agent: 'AI agent' };
+
+/** Append a preset question set (surveys/*.json); skips questions already in the list. */
+async function addPresetQuestions(containerId, name) {
+  const label = PRESET_LABELS[name] || name;
+  let questions;
+  try {
+    questions = await loadPresetQuestions(name);
+  } catch (e) {
+    showToast(`Could not load the ${label} questions`, 'error');
+    return;
+  }
+  const el = document.getElementById(containerId);
+  const have = new Set(Array.from(el.querySelectorAll(':scope > .sq-card')).map(c => {
+    try { return JSON.parse(c.dataset.meta || '{}').id; } catch (e) { return null; }
+  }));
+  const toAdd = questions.filter(q => !have.has(q.id));
+  if (!toAdd.length) {
+    showToast(`The ${label} questions are already added`, 'info');
+    return;
+  }
+  toAdd.forEach(q => {
+    const count = el.querySelectorAll(':scope > .sq-card').length;
+    el.appendChild(createSurveyCard(q, count));
+  });
+  renumberSurveyCards(el);
+  showToast(`Added ${toAdd.length} ${label} question${toAdd.length > 1 ? 's' : ''}`, 'success');
+}
+
+function addDemographicQuestions(containerId) {
+  return addPresetQuestions(containerId, 'demographics');
 }
 
 function addSurveyQuestion(containerId) {
   const el = document.getElementById(containerId);
-  const count = el.children.length;
+  const count = el.querySelectorAll(':scope > .sq-card').length;
   el.appendChild(createSurveyCard({ question: '', type: 'likert', required: true, options: [] }, count));
+  renumberSurveyCards(el);
 }
 
 function collectSurvey(containerId) {
-  return Array.from(document.querySelectorAll('#' + containerId + ' .sq-card')).map((card, i) => {
+  const cards = Array.from(document.querySelectorAll('#' + containerId + ' .sq-card'));
+  const usedIds = new Set(cards.map(c => { try { return JSON.parse(c.dataset.meta || '{}').id; } catch (e) { return null; } }).filter(Boolean));
+  const newId = (i) => {
+    let id = `q_${i}`, n = i;
+    while (usedIds.has(id)) id = `q_${++n}`;
+    usedIds.add(id);
+    return id;
+  };
+  return cards.map((card, i) => {
     let base = {};
     try { base = JSON.parse(card.dataset.meta || '{}'); } catch(e) {}
+    if (!base.id) base.id = newId(i);
     const q = card.querySelector('.sq-question').value.trim();
     const t = card.querySelector('.sq-type').value;
     const opts = Array.from(card.querySelectorAll('.sq-opt-input')).map(inp => inp.value.trim()).filter(Boolean);
@@ -1393,6 +1818,28 @@ function collectSurvey(containerId) {
     const result = Object.assign(base, { id: base.id || `q_${i}`, question: q, type: t, required: isRequired, options: opts });
     if (t === 'open_ended') {
       result.min_length = minLen;
+    }
+    if (t === 'diagram') {
+      result.diagram = readDiagramConfig(card);
+    } else {
+      delete result.diagram;
+    }
+    const helpInp = card.querySelector('.sq-help');
+    result.help_text = helpInp ? helpInp.value.trim() : (base.help_text || '');
+    const otherCb = card.querySelector('.sq-allow-other');
+    if (CHOICE_TYPES.includes(t) && otherCb && otherCb.checked) {
+      result.allow_other = true;
+    } else {
+      delete result.allow_other;
+      delete result.other_label;
+    }
+    if (t === 'matrix') {
+      result.rows = linesOf(card.querySelector('.sq-matrix-rows'));
+      result.columns = linesOf(card.querySelector('.sq-matrix-cols'));
+      result.options = [];
+    } else {
+      delete result.rows;
+      delete result.columns;
     }
     const imgSrcInp = card.querySelector('.sq-image-src');
     if (imgSrcInp && imgSrcInp.value.trim()) {
@@ -1473,7 +1920,15 @@ function buildReview() {
     const stmt = htmlPlainPreview(p.problem_statement || '', 60);
     const surveys = [];
     if (p.pre_survey_enabled && (p.pre_survey || []).length) surveys.push('Pre');
-    if (p.post_survey_enabled && (p.post_survey || []).length) surveys.push('Post');
+    if (p.post_survey_enabled) {
+      if (p.post_survey_mode === 'per_condition') {
+        const condNames = { 1: 'No AI', 2: 'Code Suggestion', 3: 'AI Agent' };
+        const parts = selectedConditions.map(c => `${condNames[c]}: ${((p.post_survey_by_condition || {})[c] || []).length}`);
+        surveys.push(`Post per condition (${parts.join(', ')})`);
+      } else if ((p.post_survey || []).length) {
+        surveys.push('Post');
+      }
+    }
     if (p.recurrent_survey_enabled && (p.recurrent_survey || []).length) surveys.push(`Recurrent (start: ${p.recurrent_survey_start}, every: ${p.recurrent_survey_interval})`);
     const surveyStr = surveys.length ? surveys.join(', ') : '<span style="color:var(--muted)">No surveys</span>';
     return `<div style="margin-bottom:8px;"><span style="color:var(--primary);font-weight:600;">${escHtml(probLabel)}:</span> ${escHtml(stmt)}${stmt.length >= 60 ? '...' : ''}<br><span style="font-size:0.85rem;color:var(--muted);">Surveys: ${surveyStr}</span></div>`;

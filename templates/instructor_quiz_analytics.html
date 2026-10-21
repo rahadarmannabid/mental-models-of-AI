@@ -181,6 +181,38 @@
 
     .hidden { display: none !important; }
 
+    .tab-bar { display: flex; gap: 4px; margin: 4px 0 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .tab-btn {
+      background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted);
+      padding: 9px 14px; font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; margin-bottom: -1px;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+    .tab-btn .tab-count { color: #64748b; font-weight: 500; margin-left: 4px; }
+    .panel-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+    .panel-head p { font-size: 0.75rem; color: var(--muted); max-width: 720px; line-height: 1.45; }
+    .panel-export {
+      color: #38bdf8; text-decoration: none; font-size: 0.8rem; white-space: nowrap;
+      padding: 6px 12px; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.35);
+    }
+    .panel-export:hover { color: #e0f2fe; border-color: #38bdf8; }
+    .col-select { width: 34px; text-align: center; }
+    .col-select input { width: 15px; height: 15px; accent-color: #38bdf8; cursor: pointer; }
+    tr.is-selected > td { background: rgba(56, 189, 248, 0.07); }
+    .bulk-bar {
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 4px 0 10px; padding: 9px 12px;
+      border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 10px; background: rgba(56, 189, 248, 0.08); font-size: 0.82rem;
+    }
+    .bulk-bar strong { color: var(--text); }
+    .bulk-bar .spacer { flex: 1; }
+    .bulk-bar button { font: inherit; font-size: 0.78rem; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+    .bulk-bar .bulk-link { background: none; border: 1px solid var(--border); color: var(--muted); }
+    .bulk-bar .bulk-link:hover { color: var(--text); border-color: #475569; }
+    .bulk-bar .btn-bulk-delete { background: #dc2626; border: 1px solid #dc2626; color: #fff; font-weight: 600; }
+    .bulk-bar .btn-bulk-delete:hover { background: #b91c1c; }
+    .panel-empty { text-align: center; color: #64748b; padding: 40px 12px; font-size: 0.85rem; border: 1px dashed var(--border); border-radius: var(--radius); }
+    .section-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: #64748b; margin: 18px 0 8px; }
+
     .user-log-link {
       color: var(--accent);
       text-decoration: none;
@@ -515,6 +547,10 @@
     .survey-qa-table tbody tr:nth-child(odd) td { background: rgba(2, 6, 23, 0.18); }
     .survey-qa-table .survey-q { color: #cbd5e1; width: 42%; }
     .survey-qa-table .survey-a { color: #e2e8f0; }
+    .survey-diagram img { display: block; max-width: 320px; max-height: 240px; border-radius: 6px; background: #fff; border: 1px solid #334155; }
+    .survey-diagram-tool { color: #94a3b8; font-size: 0.72rem; margin-top: 4px; }
+    .survey-diagram-code summary { cursor: pointer; color: #9B7FC4; font-size: 0.72rem; margin-top: 4px; }
+    .survey-diagram-code pre { white-space: pre-wrap; font-size: 0.72rem; color: #cbd5e1; margin: 4px 0 0; }
     .survey-occ-label {
       font-size: 0.62rem;
       color: #64748b;
@@ -553,6 +589,13 @@
       <div id="legacy-banner" class="banner hidden"></div>
       <div id="live-scope-banner" class="banner hidden"></div>
 
+      <div class="tab-bar" role="tablist">
+        <button type="button" class="tab-btn" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+        <button type="button" class="tab-btn" role="tab" data-tab="autocomplete" aria-selected="false">Autocomplete<span class="tab-count" id="tab-count-autocomplete"></span></button>
+        <button type="button" class="tab-btn" role="tab" data-tab="agent" aria-selected="false">Coding agent<span class="tab-count" id="tab-count-agent"></span></button>
+      </div>
+
+      <div class="tab-panel" id="tab-overview">
       <div class="kpi-grid" id="kpi-strip"></div>
 
       <div class="chart-grid cols-3" style="margin-bottom:14px;">
@@ -560,7 +603,6 @@
           <div class="chart-card-head">
             <div>
               <h3>Active now (by problem)</h3>
-              <p>Live users (this server only).</p>
             </div>
             <div class="chart-overlay-stat" id="overlay-live"></div>
           </div>
@@ -570,7 +612,6 @@
           <div class="chart-card-head">
             <div>
               <h3>Submissions reached (by problem)</h3>
-              <p>Sessions with saved code per problem (Firebase). With multiple conditions, bars are grouped by condition.</p>
             </div>
             <div class="chart-overlay-stat" id="overlay-completion"></div>
           </div>
@@ -580,7 +621,6 @@
           <div class="chart-card-head">
             <div>
               <h3>Sessions by condition</h3>
-              <p>Total, completed, and incomplete per condition.</p>
             </div>
             <div class="chart-overlay-stat" id="overlay-condition"></div>
           </div>
@@ -588,12 +628,11 @@
         </div>
       </div>
 
-      <div class="chart-grid cols-3" style="margin-bottom:14px;">
+      <div class="chart-grid cols-2" style="margin-bottom:14px;">
         <div class="chart-card">
           <div class="chart-card-head">
             <div>
               <h3>Time on task (seconds)</h3>
-              <p>Total + P1… — one boxplot per condition when multiple conditions exist.</p>
             </div>
             <div class="chart-overlay-stat" id="overlay-time"></div>
           </div>
@@ -602,8 +641,21 @@
         <div class="chart-card">
           <div class="chart-card-head">
             <div>
+              <h3>Code runs (compile)</h3>
+            </div>
+            <div class="chart-overlay-stat" id="overlay-runs"></div>
+          </div>
+          <div class="chart-card-body tall" id="chart-runs"></div>
+        </div>
+      </div>
+
+      <div id="legacy-ai-row">
+        <div class="section-label">Legacy AI popup (older sessions only)</div>
+        <div class="chart-grid cols-3" style="margin-bottom:14px;">
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
               <h3>AI suggestions generated</h3>
-              <p>Total + P1… per session; legend shows condition when applicable.</p>
             </div>
             <div class="chart-overlay-stat" id="overlay-ai"></div>
           </div>
@@ -613,34 +665,20 @@
           <div class="chart-card-head">
             <div>
               <h3>Accepted suggestions</h3>
-              <p>Total + P1…; multiple conditions share the same categories.</p>
             </div>
             <div class="chart-overlay-stat" id="overlay-accept"></div>
           </div>
           <div class="chart-card-body tall" id="chart-accept"></div>
         </div>
-      </div>
-
-      <div class="chart-grid cols-2" style="margin-bottom:14px;">
         <div class="chart-card">
           <div class="chart-card-head">
             <div>
               <h3>Rejected suggestions</h3>
-              <p>Total + P1…; multiple conditions as separate boxplots per category.</p>
             </div>
             <div class="chart-overlay-stat" id="overlay-reject"></div>
           </div>
-          <div class="chart-card-body" id="chart-reject"></div>
+          <div class="chart-card-body tall" id="chart-reject"></div>
         </div>
-        <div class="chart-card">
-          <div class="chart-card-head">
-            <div>
-              <h3>Code runs (compile)</h3>
-              <p>Total + P1…; legend distinguishes conditions when more than one.</p>
-            </div>
-            <div class="chart-overlay-stat" id="overlay-runs"></div>
-          </div>
-          <div class="chart-card-body" id="chart-runs"></div>
         </div>
       </div>
 
@@ -648,7 +686,6 @@
         <div class="table-card-head">
           <div>
             <h3>Individual student sessions</h3>
-            <p>Per-session metrics, final code, and pre/post/periodic survey Q&amp;A (expandable). Click a <strong>user id</strong> to open the <strong>AI activity log</strong> (suggestions, accept/reject, snapshots).</p>
           </div>
           <div>
             <span class="cell-muted" id="student-sessions-count"></span>
@@ -664,10 +701,18 @@
               Only completed
             </label>
           </div>
+          <div class="bulk-bar hidden" id="bulkBar" role="region" aria-label="Selected students">
+            <span><strong id="bulkCount">0</strong> <span id="bulkNoun">students</span> selected</span>
+            <button type="button" class="bulk-link" id="bulkSelectAll"></button>
+            <button type="button" class="bulk-link" id="bulkClear">Clear selection</button>
+            <span class="spacer"></span>
+            <button type="button" class="btn-bulk-delete" id="bulkDelete">Delete selected</button>
+          </div>
           <div class="student-table-wrap">
             <table class="student-table" id="student-sessions-table">
               <thead>
                 <tr>
+                  <th class="col-select"><input type="checkbox" id="selectAllSessions" title="Select all matching students" aria-label="Select all matching students"></th>
                   <th class="col-user">User</th>
                   <th class="col-status">Status</th>
                   <th class="col-condition">Condition</th>
@@ -693,6 +738,132 @@
           </div>
         </div>
       </div>
+      </div>
+
+      <div class="tab-panel hidden" id="tab-autocomplete">
+        <div class="panel-head">
+          <p>Students in the <strong>autocomplete</strong> condition (C2). Ghost-text suggestions appear while they type. Each one is <strong>accepted</strong> (Tab), <strong>rejected</strong> (Esc) or <strong>ignored</strong> (the student kept typing until it disappeared). Click a student to see every suggestion with its timing and the code in the IDE.</p>
+          <a class="panel-export" href="/instructor/quiz/{{ quiz_id }}/condition-export/autocomplete">Download suggestions (CSV)</a>
+        </div>
+        <div id="ac-empty" class="panel-empty hidden">No autocomplete (C2) sessions for this quiz yet.</div>
+        <div id="ac-content">
+          <div class="kpi-grid" id="ac-kpis"></div>
+          <div class="chart-grid cols-3" style="margin-bottom:14px;">
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Suggestions shown vs accepted (by problem)</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ac-overlay-problem"></div>
+          </div>
+          <div class="chart-card-body" id="ac-chart-problem"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Acceptance rate per student</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ac-overlay-rate"></div>
+          </div>
+          <div class="chart-card-body" id="ac-chart-rate"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Generation vs decision time (s)</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ac-overlay-latency"></div>
+          </div>
+          <div class="chart-card-body" id="ac-chart-latency"></div>
+        </div>
+          </div>
+        <div class="table-card">
+          <div class="table-card-head"><div><h3>Per student</h3></div></div>
+          <div class="table-card-body">
+            <div class="student-table-wrap">
+              <table class="student-table"><thead><tr><th>User</th><th>Status</th><th>Shown</th><th>Accepted</th><th>Rejected</th><th>Ignored</th><th>Accept rate</th><th>Accepted lines</th><th>Median generation</th><th>Median time to accept</th></tr></thead><tbody id="ac-tbody"></tbody></table>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
+
+      <div class="tab-panel hidden" id="tab-agent">
+        <div class="panel-head">
+          <p>Students in the <strong>coding agent</strong> condition (C3). Each interaction is one student message: the prompt, the agent's response, how long it took, and the lines it added or removed. Students then keep or undo each edit.</p>
+          <a class="panel-export" href="/instructor/quiz/{{ quiz_id }}/condition-export/agent">Download interactions (CSV)</a>
+        </div>
+        <div id="ag-empty" class="panel-empty hidden">No coding agent (C3) sessions for this quiz yet.</div>
+        <div id="ag-content">
+          <div class="kpi-grid" id="ag-kpis"></div>
+          <div class="chart-grid cols-3" style="margin-bottom:14px;">
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Interactions by problem</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ag-overlay-problem"></div>
+          </div>
+          <div class="chart-card-body" id="ag-chart-problem"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Agent response time (s)</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ag-overlay-duration"></div>
+          </div>
+          <div class="chart-card-body" id="ag-chart-duration"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Lines added / removed by problem</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ag-overlay-lines"></div>
+          </div>
+          <div class="chart-card-body" id="ag-chart-lines"></div>
+        </div>
+          </div>
+          <div class="chart-grid cols-3" style="margin-bottom:14px;">
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Interactions per student</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ag-overlay-students"></div>
+          </div>
+          <div class="chart-card-body" id="ag-chart-students"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Edit decisions</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ag-overlay-decisions"></div>
+          </div>
+          <div class="chart-card-body" id="ag-chart-decisions"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-head">
+            <div>
+              <h3>Mode used</h3>
+            </div>
+            <div class="chart-overlay-stat" id="ag-overlay-modes"></div>
+          </div>
+          <div class="chart-card-body" id="ag-chart-modes"></div>
+        </div>
+          </div>
+        <div class="table-card">
+          <div class="table-card-head"><div><h3>Per student</h3></div></div>
+          <div class="table-card-body">
+            <div class="student-table-wrap">
+              <table class="student-table"><thead><tr><th>User</th><th>Status</th><th>Interactions</th><th>Median time</th><th>Lines +</th><th>Lines −</th><th>Kept</th><th>Undone</th><th>Tokens</th></tr></thead><tbody id="ag-tbody"></tbody></table>
+            </div>
+          </div>
+        </div>
+        </div>
+      </div>
     </div>
 
     <div id="empty-state" class="empty hidden">
@@ -703,6 +874,7 @@
   </div>
 
   {% if firebase_available %}
+  <script src="/static/ui-motion.js"></script>
   <script type="application/json" id="analytics-bootstrap">{{ {"quiz_id": quiz_id, "problem_labels": problem_labels } | tojson | safe }}</script>
   <script>
   (function() {
@@ -849,6 +1021,254 @@
     }
     window.addEventListener('resize', resizeAll);
 
+    // ── Tabs: Overview | Autocomplete (C2) | Coding agent (C3) ─────────────────
+    function showTab(name) {
+      var found = false;
+      document.querySelectorAll('.tab-btn').forEach(function(b) {
+        var on = b.dataset.tab === name;
+        found = found || on;
+        b.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      if (!found) return showTab('overview');
+      document.querySelectorAll('.tab-panel').forEach(function(p) {
+        var show = p.id === 'tab-' + name;
+        var wasHidden = p.classList.contains('hidden');
+        p.classList.toggle('hidden', !show);
+        if (show && wasHidden && window.UIMotion) {
+          UIMotion.enter(p.querySelectorAll('.kpi, .chart-card, .table-card, .panel-empty'), { stagger: 30, distance: 8 });
+        }
+      });
+      try { history.replaceState(null, '', '#' + name); } catch (e) {}
+      // Charts in a hidden panel were drawn at a fallback size; fit them now that they are visible.
+      requestAnimationFrame(resizeAll);
+    }
+    document.querySelectorAll('.tab-btn').forEach(function(b) {
+      b.addEventListener('click', function() { showTab(b.dataset.tab); });
+    });
+
+    function pct(x) { return x == null ? '—' : Math.round(x * 100) + '%'; }
+    function kpiHtml(items) {
+      return items.map(function(it) {
+        return '<div class="kpi' + (it.cls ? ' ' + it.cls : '') + '"><div class="label">' + escHtml(it.label) +
+          '</div><div class="value">' + escHtml(it.value) + '</div>' +
+          (it.hint ? '<div class="hint">' + escHtml(it.hint) + '</div>' : '') + '</div>';
+      }).join('');
+    }
+    function boxTooltip(unit) {
+      return {
+        trigger: 'item',
+        formatter: function(p) {
+          var d = p.data;
+          if (!d || d.length < 5) return '';
+          var u = unit || '';
+          return p.name + '<br/>min: ' + fmtNum(d[0]) + u + ' · Q1: ' + fmtNum(d[1]) + u +
+            '<br/>median: <strong>' + fmtNum(d[2]) + u + '</strong> · Q3: ' + fmtNum(d[3]) + u +
+            '<br/>max: ' + fmtNum(d[4]) + u;
+        },
+      };
+    }
+    function catAxis(cats, rotate) {
+      return { type: 'category', data: cats, axisLine: { lineStyle: { color: THEME.border } },
+        axisLabel: { color: THEME.text, fontSize: 10, interval: 0, rotate: rotate || 0 } };
+    }
+    function valAxis(name, integer) {
+      return { type: 'value', min: 0, minInterval: integer ? 1 : undefined,
+        nameTextStyle: { color: THEME.text, fontSize: 10 },
+        splitLine: { lineStyle: { color: THEME.grid } }, axisLabel: { color: THEME.text, fontSize: 10 } };
+    }
+    function barSeries(name, values, color) {
+      return { name: name, type: 'bar', data: values, barMaxWidth: 28,
+        itemStyle: { color: color, borderRadius: [4, 4, 0, 0] } };
+    }
+    function legend(names) {
+      return { data: names, top: 2, right: 8, textStyle: { color: THEME.text, fontSize: 10 }, itemWidth: 12, itemHeight: 8 };
+    }
+    function shortUser(u) { u = String(u || ''); return u.length > 12 ? u.slice(0, 11) + '…' : u; }
+    function statusCell(done) {
+      return done ? '<span style="color:#009E73">Completed</span>' : '<span class="cell-muted">In progress</span>';
+    }
+    /** Opens the student's page with every suggestion / agent interaction. */
+    function userLink(uid) {
+      return '<a class="user-log-link" title="See every interaction of ' + escHtml(uid) + '" href="/instructor/quiz/' +
+        encodeURIComponent(quizId) + '/activity-log?user_id=' + encodeURIComponent(uid) + '">' + escHtml(uid) + '</a>';
+    }
+    function fmtSec(x) { return x == null ? '—' : fmtNum(Math.round(x * 10) / 10) + ' s'; }
+
+    function renderAutocompletePanel(ac, labels) {
+      var pCats = labels.map(function(_, i) { return 'P' + (i + 1); });
+      var rot = pCats.length > 6 ? 22 : 0;
+      document.getElementById('tab-count-autocomplete').textContent = '(' + (ac.sessions || 0) + ')';
+      if (!ac.sessions) {
+        document.getElementById('ac-empty').classList.remove('hidden');
+        document.getElementById('ac-content').classList.add('hidden');
+        return;
+      }
+      var students = ac.per_student || [];
+      var rates = students.map(function(s) { return s.acceptance_rate; }).filter(function(x) { return x != null; });
+      document.getElementById('ac-kpis').innerHTML = kpiHtml([
+        { label: 'Students', value: ac.sessions },
+        { label: 'Suggestions shown', value: ac.shown_total || 0 },
+        { label: 'Accepted', value: ac.accepted_total || 0, cls: 'success', hint: (ac.rejected_total || 0) + ' rejected (Esc) · ' + (ac.ignored_total || 0) + ' ignored' },
+        { label: 'Acceptance rate', value: pct(ac.acceptance_rate), hint: 'median per student ' + pct(median(rates)) },
+        { label: 'Accepted lines', value: ac.accepted_lines_total || 0 },
+        { label: 'Median generation', value: ac.median_latency_ms == null ? '—' : Math.round(ac.median_latency_ms) + ' ms' },
+        { label: 'Median time to accept', value: ac.median_time_to_accept_ms == null ? '—' : fmtSec(ac.median_time_to_accept_ms / 1000),
+          hint: 'to reject ' + (ac.median_time_to_reject_ms == null ? '—' : fmtSec(ac.median_time_to_reject_ms / 1000)) },
+      ]);
+
+      var bp = ac.by_problem || {};
+      document.getElementById('ac-overlay-problem').innerHTML = '<strong>' + (ac.shown_total || 0) + '</strong> shown · <strong>' + (ac.accepted_total || 0) + '</strong> accepted';
+      initChart('ac-chart-problem', Object.assign(baseOption(), {
+        grid: { left: 40, right: 12, top: 30, bottom: 36 },
+        legend: legend(['Shown', 'Accepted']),
+        tooltip: { trigger: 'axis', confine: true, backgroundColor: 'rgba(15,23,42,0.95)', borderColor: THEME.border, textStyle: { color: '#e2e8f0', fontSize: 11 } },
+        xAxis: catAxis(pCats, rot), yAxis: valAxis('Count', true),
+        series: [barSeries('Shown', bp.shown || [], THEME.metric.ai.fill), barSeries('Accepted', bp.accepted || [], THEME.metric.accept.fill)],
+      }));
+
+      var sorted = students.filter(function(s) { return s.acceptance_rate != null; })
+        .sort(function(a, b) { return b.acceptance_rate - a.acceptance_rate; });
+      document.getElementById('ac-overlay-rate').innerHTML = 'median <strong>' + pct(median(rates)) + '</strong>';
+      initChart('ac-chart-rate', Object.assign(baseOption(), {
+        grid: { left: 44, right: 12, top: 20, bottom: 36 },
+        tooltip: { trigger: 'item', formatter: function(p) {
+          var s = sorted[p.dataIndex];
+          return escHtml(s.user_id) + '<br/>' + s.accepted + ' / ' + s.shown + ' accepted (' + pct(s.acceptance_rate) + ')';
+        } },
+        xAxis: Object.assign(catAxis(sorted.map(function(s) { return shortUser(s.user_id); }), 30),
+          { axisLabel: { show: sorted.length <= 20, color: THEME.text, fontSize: 9, interval: 0, rotate: 30 } }),
+        yAxis: Object.assign(valAxis('%'), { max: 100 }),
+        series: [barSeries('Acceptance rate', sorted.map(function(s) { return Math.round(s.acceptance_rate * 1000) / 10; }), THEME.metric.accept.fill)],
+      }));
+
+      function secs(arr) { return (arr || []).map(function(v) { return v / 1000; }); }
+      var ttd = ac.time_to_decision_ms_all || {};
+      var timing = [
+        { name: 'Generation', vals: secs(ac.latency_ms_all), color: THEME.metric.time },
+        { name: 'To accept', vals: secs(ttd.accepted), color: THEME.metric.accept },
+        { name: 'To reject', vals: secs(ttd.rejected), color: THEME.metric.reject },
+        { name: 'To ignore', vals: secs(ttd.ignored), color: THEME.metric.ai },
+      ];
+      document.getElementById('ac-overlay-latency').innerHTML = 'generation <strong>' + (ac.median_latency_ms == null ? '—' : Math.round(ac.median_latency_ms) + ' ms') + '</strong>';
+      initChart('ac-chart-latency', Object.assign(baseOption(), {
+        grid: { left: 44, right: 18, top: 22, bottom: 36 },
+        xAxis: catAxis(timing.map(function(t) { return t.name + ' (' + t.vals.length + ')'; })), yAxis: valAxis('s'),
+        series: [{ type: 'boxplot', boxWidth: 28, data: timing.map(function(t) {
+          return { value: boxRow(t.vals), itemStyle: { color: t.color.fill, borderColor: t.color.border } };
+        }) }],
+        tooltip: { trigger: 'item', formatter: function(p) {
+          var d = p.data && p.data.value;
+          if (!d) return '';
+          return p.name + '<br/>min ' + fmtNum(d[0]) + ' s · median <strong>' + fmtNum(d[2]) + ' s</strong> · max ' + fmtNum(d[4]) + ' s';
+        } },
+      }));
+
+      document.getElementById('ac-tbody').innerHTML = students.slice().sort(function(a, b) { return b.shown - a.shown; }).map(function(s) {
+        return '<tr><td class="col-user">' + userLink(s.user_id) + '</td><td>' + statusCell(s.completed) +
+          '</td><td class="col-num">' + s.shown + '</td><td class="col-acc">' + s.accepted + '</td><td class="col-rej">' + (s.rejected || 0) +
+          '</td><td class="col-num">' + (s.ignored || 0) + '</td><td class="col-num">' + pct(s.acceptance_rate) +
+          '</td><td class="col-num">' + s.accepted_lines + '</td><td class="col-num">' + (s.median_latency_ms == null ? '—' : Math.round(s.median_latency_ms) + ' ms') +
+          '</td><td class="col-num">' + (s.median_time_to_accept_ms == null ? '—' : fmtSec(s.median_time_to_accept_ms / 1000)) + '</td></tr>';
+      }).join('');
+    }
+
+    function renderAgentPanel(ag, labels) {
+      var pCats = labels.map(function(_, i) { return 'P' + (i + 1); });
+      var rot = pCats.length > 6 ? 22 : 0;
+      document.getElementById('tab-count-agent').textContent = '(' + (ag.sessions || 0) + ')';
+      if (!ag.sessions) {
+        document.getElementById('ag-empty').classList.remove('hidden');
+        document.getElementById('ag-content').classList.add('hidden');
+        return;
+      }
+      var students = ag.per_student || [];
+      var decided = (ag.edits_kept || 0) + (ag.edits_undone || 0);
+      document.getElementById('ag-kpis').innerHTML = kpiHtml([
+        { label: 'Students', value: ag.sessions },
+        { label: 'Interactions', value: ag.interactions_total || 0, hint: 'median ' + fmtNum(ag.median_interactions_per_student) + ' per student' },
+        { label: 'Median response time', value: fmtSec(ag.median_duration_seconds), hint: 'first output ' + fmtSec(ag.median_first_output_seconds) },
+        { label: 'Lines added', value: ag.lines_added_total || 0, cls: 'success' },
+        { label: 'Lines removed', value: ag.lines_removed_total || 0, cls: 'warn' },
+        { label: 'Edits kept', value: decided ? pct((ag.edits_kept || 0) / decided) : '—', hint: (ag.edits_kept || 0) + ' kept · ' + (ag.edits_undone || 0) + ' undone' },
+      ]);
+
+      var bp = ag.by_problem || {};
+      document.getElementById('ag-overlay-problem').innerHTML = '<strong>' + (ag.interactions_total || 0) + '</strong> total';
+      initChart('ag-chart-problem', Object.assign(baseOption(), {
+        grid: { left: 40, right: 12, top: 20, bottom: 36 },
+        xAxis: catAxis(pCats, rot), yAxis: valAxis('Interactions', true),
+        series: [barSeries('Interactions', bp.interactions || [], THEME.metric.ai.fill)],
+      }));
+
+      var durCats = ['All'].concat(pCats);
+      var durRows = [boxRow(ag.duration_seconds_all || [])].concat((bp.duration_seconds || []).map(function(c) { return boxRow(c); }));
+      document.getElementById('ag-overlay-duration').innerHTML = 'median <strong>' + fmtSec(ag.median_duration_seconds) + '</strong>';
+      initChart('ag-chart-duration', Object.assign(baseOption(), {
+        grid: { left: 44, right: 18, top: 22, bottom: 36 },
+        xAxis: catAxis(durCats, rot), yAxis: valAxis('s'),
+        series: [{ type: 'boxplot', data: durRows, itemStyle: { color: THEME.metric.time.fill, borderColor: THEME.metric.time.border } }],
+        tooltip: boxTooltip(' s'),
+      }));
+
+      document.getElementById('ag-overlay-lines').innerHTML = '+<strong>' + (ag.lines_added_total || 0) + '</strong> · −<strong>' + (ag.lines_removed_total || 0) + '</strong>';
+      initChart('ag-chart-lines', Object.assign(baseOption(), {
+        grid: { left: 44, right: 12, top: 30, bottom: 36 },
+        legend: legend(['Added', 'Removed']),
+        tooltip: { trigger: 'axis', confine: true, backgroundColor: 'rgba(15,23,42,0.95)', borderColor: THEME.border, textStyle: { color: '#e2e8f0', fontSize: 11 } },
+        xAxis: catAxis(pCats, rot), yAxis: valAxis('Lines', true),
+        series: [barSeries('Added', bp.lines_added || [], THEME.metric.accept.fill), barSeries('Removed', bp.lines_removed || [], THEME.metric.reject.fill)],
+      }));
+
+      var byCount = students.filter(function(s) { return s.interactions > 0; })
+        .sort(function(a, b) { return b.interactions - a.interactions; });
+      document.getElementById('ag-overlay-students').innerHTML = '<strong>' + byCount.length + '</strong> of ' + students.length + ' used the agent';
+      initChart('ag-chart-students', Object.assign(baseOption(), {
+        grid: { left: 40, right: 12, top: 20, bottom: 36 },
+        tooltip: { trigger: 'item', formatter: function(p) {
+          var s = byCount[p.dataIndex];
+          return escHtml(s.user_id) + '<br/>' + s.interactions + ' interactions';
+        } },
+        xAxis: Object.assign(catAxis(byCount.map(function(s) { return shortUser(s.user_id); }), 30),
+          { axisLabel: { show: byCount.length <= 20, color: THEME.text, fontSize: 9, interval: 0, rotate: 30 } }),
+        yAxis: valAxis('Interactions', true),
+        series: [barSeries('Interactions', byCount.map(function(s) { return s.interactions; }), THEME.metric.ai.fill)],
+      }));
+
+      document.getElementById('ag-overlay-decisions').innerHTML = decided ? pct((ag.edits_kept || 0) / decided) + ' kept' : 'No decisions yet';
+      initChart('ag-chart-decisions', Object.assign(baseOption(), {
+        grid: { left: 40, right: 12, top: 20, bottom: 36 },
+        xAxis: catAxis(['Kept', 'Undone']), yAxis: valAxis('Edits', true),
+        series: [{ type: 'bar', barMaxWidth: 44, data: [
+          { value: ag.edits_kept || 0, itemStyle: { color: THEME.metric.accept.fill, borderRadius: [4, 4, 0, 0] } },
+          { value: ag.edits_undone || 0, itemStyle: { color: THEME.metric.reject.fill, borderRadius: [4, 4, 0, 0] } },
+        ] }],
+      }));
+
+      var modes = ag.modes || {};
+      var modeNames = Object.keys(modes).sort(function(a, b) { return modes[b] - modes[a]; });
+      document.getElementById('ag-overlay-modes').innerHTML = modeNames.map(function(m) { return escHtml(m) + ': ' + modes[m]; }).join(' · ');
+      initChart('ag-chart-modes', Object.assign(baseOption(), {
+        grid: { left: 40, right: 12, top: 20, bottom: 36 },
+        xAxis: catAxis(modeNames.map(function(m) { return m.charAt(0).toUpperCase() + m.slice(1); })), yAxis: valAxis('Interactions', true),
+        series: [barSeries('Interactions', modeNames.map(function(m) { return modes[m]; }), THEME.metric.runs.fill)],
+      }));
+
+      document.getElementById('ag-tbody').innerHTML = students.slice().sort(function(a, b) { return b.interactions - a.interactions; }).map(function(s) {
+        return '<tr><td class="col-user">' + userLink(s.user_id) + '</td><td>' + statusCell(s.completed) +
+          '</td><td class="col-num">' + s.interactions + '</td><td class="col-num">' + fmtSec(s.median_duration_seconds) +
+          '</td><td class="col-acc">' + s.lines_added + '</td><td class="col-rej">' + s.lines_removed +
+          '</td><td class="col-num">' + s.edits_kept + '</td><td class="col-num">' + s.edits_undone + '</td><td class="col-num">' + s.tokens + '</td></tr>';
+      }).join('');
+    }
+
+    /** Reload with the server cache bypassed. Assigning the same URL (with a #hash) would not reload. */
+    function reloadFresh() {
+      var url = new URL(window.location.href);
+      url.searchParams.set('refresh', '1');
+      if (url.href === window.location.href) window.location.reload();
+      else window.location.href = url.href;
+    }
+
     var urlParams = new URLSearchParams(window.location.search);
     var initialForceRefresh = urlParams.get('refresh') === '1';
 
@@ -895,21 +1315,12 @@
         }
         var mainEl = document.getElementById('main-content');
         mainEl.classList.remove('hidden');
+        if (window.UIMotion) UIMotion.enter(document.querySelectorAll('#tab-overview .chart-card, #tab-overview .table-card'), { stagger: 40 });
         // Force layout before chart init (parent was display:none; ECharts needs non-zero box)
         try {
           void mainEl.offsetHeight;
         } catch (e) {}
 
-        if (live.scope_note) {
-          var lb = document.getElementById('live-scope-banner');
-          lb.classList.remove('hidden');
-          lb.innerHTML = '<strong>Live activity:</strong> ' + String(live.scope_note);
-        }
-        if (!data.per_problem_activity_breakdown) {
-          var b = document.getElementById('legacy-banner');
-          b.classList.remove('hidden');
-          b.innerHTML = '<strong>Note:</strong> Older sessions may lack per-problem activity tags; some per-problem charts can look empty.';
-        }
 
         var labels = data.problem_labels && data.problem_labels.length ? data.problem_labels : defaultLabels;
         var dh = data.data_health || {};
@@ -973,15 +1384,17 @@
         var runsArr = sumBox.runs_total || [];
         var avgCompilation = runsArr.length ? sum(runsArr) / runsArr.length : 0;
         kpi.innerHTML = [
-          '<div class="kpi live"><div class="label">Active now</div><div class="value">' + liveTotal + '</div><div class="hint">This server</div></div>',
-          '<div class="kpi"><div class="label">Avg. compilation</div><div class="value">' + fmtNum(avgCompilation) + '</div><div class="hint">Mean code runs per session</div></div>',
-          '<div class="kpi success"><div class="label">Completed</div><div class="value">' + (data.completed_assignments || 0) + '</div><div class="hint">Final submit</div></div>',
-          '<div class="kpi' + ((data.incomplete_sessions || 0) > 0 ? ' warn' : '') + '"><div class="label">Incomplete</div><div class="value">' + (data.incomplete_sessions || 0) + '</div><div class="hint">Left without submitting</div></div>',
-          '<div class="kpi"><div class="label">Med. session time</div><div class="value">' + fmtNum(summary.median_session_time_seconds) + '</div><div class="hint">sec · completed (focus if logged)</div></div>',
-          '<div class="kpi warn"><div class="label">Med. AI gen</div><div class="value">' + fmtNum(summary.median_ai_generations) + '</div><div class="hint">per session</div></div>',
-          '<div class="kpi"><div class="label">Accepted</div><div class="value">' + totalAccepts + '</div><div class="hint">Σ all · med ' + fmtNum(medAccept) + '/session</div></div>',
-          '<div class="kpi"><div class="label">Rejected</div><div class="value">' + totalRejects + '</div><div class="hint">Σ all · med ' + fmtNum(medReject) + '/session</div></div>',
-        ].join('');
+          '<div class="kpi live"><div class="label">Active now</div><div class="value">' + liveTotal + '</div></div>',
+          '<div class="kpi"><div class="label">Avg. compilation</div><div class="value">' + fmtNum(avgCompilation) + '</div></div>',
+          '<div class="kpi success"><div class="label">Completed</div><div class="value">' + (data.completed_assignments || 0) + '</div></div>',
+          '<div class="kpi' + ((data.incomplete_sessions || 0) > 0 ? ' warn' : '') + '"><div class="label">Incomplete</div><div class="value">' + (data.incomplete_sessions || 0) + '</div></div>',
+          '<div class="kpi"><div class="label">Med. session time (s)</div><div class="value">' + fmtNum(summary.median_session_time_seconds) + '</div></div>',
+        ].concat(sum(sumBox.ai_generations_total) + totalAccepts + totalRejects === 0 ? [] : [
+          // Old AI popup metrics: only shown for quizzes that have sessions from earlier study versions.
+          '<div class="kpi warn"><div class="label">Med. AI gen</div><div class="value">' + fmtNum(summary.median_ai_generations) + '</div></div>',
+          '<div class="kpi"><div class="label">Accepted</div><div class="value">' + totalAccepts + '</div><div class="hint">med ' + fmtNum(medAccept) + '</div></div>',
+          '<div class="kpi"><div class="label">Rejected</div><div class="value">' + totalRejects + '</div><div class="hint">med ' + fmtNum(medReject) + '</div></div>',
+        ]).join('');
 
         var catLive = ['Total'].concat(labels.map(function(_, i) { return 'P' + (i + 1); }));
         var liveY = liveBy.length ? liveBy : labels.map(function() { return 0; });
@@ -1138,7 +1551,7 @@
             var s = sbc[c] || {};
             return condLab(c) + ' med: ' + fmtNum(s.median_session_time_seconds != null ? s.median_session_time_seconds : 0) + ' s';
           });
-          document.getElementById('overlay-time').innerHTML = timeMedLines.join('\n') + '\n(focus if logged; box: min–Q1–med–Q3–max)';
+          document.getElementById('overlay-time').innerHTML = timeMedLines.join('\n');
           var timeSeriesList = boxPlotSeriesFromBbc('total_time_seconds', 'time_per_problem_seconds');
           var timeYMax = maxFromBoxplotSeriesList(timeSeriesList);
           initChart('chart-time-combined', Object.assign(baseOption(), {
@@ -1177,7 +1590,7 @@
           var timeBox = [boxRow(tt)].concat((tpm || []).map(function(col) { return boxRow(col); }));
           var medT = median(tt);
           var timeSingleMax = maxFromBoxplotSeriesList([{ data: timeBox }]);
-          document.getElementById('overlay-time').innerHTML = 'Median session time: <strong>' + fmtNum(medT) + '</strong> sec\n(focus if logged; box: min–Q1–med–Q3–max)';
+          document.getElementById('overlay-time').innerHTML = 'Median session time: <strong>' + fmtNum(medT) + '</strong> sec';
           initChart('chart-time-combined', Object.assign(baseOption(), {
             grid: { left: 52, right: 18, top: 22, bottom: gridBottomBox },
             xAxis: {
@@ -1566,6 +1979,13 @@
           }));
         }
 
+        // The old AI popup charts only have data for sessions from earlier study versions.
+        var legacyAi = sum(sumBox.ai_generations_total) + sum(sumBox.accepts_total) + sum(sumBox.rejects_total);
+        document.getElementById('legacy-ai-row').classList.toggle('hidden', legacyAi === 0);
+        renderAutocompletePanel(data.autocomplete || {}, labels);
+        renderAgentPanel(data.agent || {}, labels);
+        showTab((location.hash || '#overview').slice(1));
+
         (function renderStudentSessionsTable() {
           var card = document.getElementById('student-sessions-card');
           var tbody = document.getElementById('student-sessions-tbody');
@@ -1675,14 +2095,35 @@
             );
           }
 
-          function surveyQaTableHtml(qaList) {
+          var DIAGRAM_TOOL_NAMES = { canvas: 'Canvas', boxes: 'Boxes & arrows', mermaid: 'Mermaid', upload: 'Uploaded image' };
+
+          function surveyAnswerHtml(item, sessionId) {
+            var d = item.diagram;
+            if (!d || !d.id || !sessionId) return escHtml(item.a);
+            var src = '/instructor/quiz/' + encodeURIComponent(quizId) + '/diagram?session_id=' +
+              encodeURIComponent(sessionId) + '&diagram_id=' + encodeURIComponent(d.id);
+            var code = '';
+            var nl = String(item.a || '').indexOf('\n');
+            if (d.tool === 'mermaid' && nl !== -1) {
+              code = '<details class="survey-diagram-code"><summary>Mermaid code</summary><pre>' +
+                escHtml(String(item.a).slice(nl + 1)) + '</pre></details>';
+            }
+            return '<div class="survey-diagram">' +
+              '<a href="' + src + '" target="_blank" rel="noopener" title="Open full size">' +
+              '<img loading="lazy" src="' + src + '" alt="Diagram answer" ' +
+              'onerror="this.parentNode.outerHTML=\'<span class=&quot;cell-muted&quot;>Image not available</span>\'"></a>' +
+              '<div class="survey-diagram-tool">' + escHtml(DIAGRAM_TOOL_NAMES[d.tool] || d.tool || 'Diagram') + '</div>' +
+              code + '</div>';
+          }
+
+          function surveyQaTableHtml(qaList, sessionId) {
             if (!qaList || !qaList.length) {
               return '<div class="cell-muted">No answers</div>';
             }
             var rows = [];
             for (var i = 0; i < qaList.length; i++) {
               rows.push(
-                '<tr><td class="survey-q">' + escHtml(qaList[i].q) + '</td><td class="survey-a">' + escHtml(qaList[i].a) + '</td></tr>'
+                '<tr><td class="survey-q">' + escHtml(qaList[i].q) + '</td><td class="survey-a">' + surveyAnswerHtml(qaList[i], sessionId) + '</td></tr>'
               );
             }
             return (
@@ -1700,13 +2141,13 @@
             if (survey.pre) {
               out +=
                 '<div class="survey-block"><div class="survey-block-title">Pre</div>' +
-                surveyQaTableHtml(survey.pre.qa || []) +
+                surveyQaTableHtml(survey.pre.qa || [], row.session_id) +
                 '</div>';
             }
             if (survey.post) {
               out +=
                 '<div class="survey-block"><div class="survey-block-title">Post</div>' +
-                surveyQaTableHtml(survey.post.qa || []) +
+                surveyQaTableHtml(survey.post.qa || [], row.session_id) +
                 '</div>';
             }
             if (survey.periodic) {
@@ -1719,7 +2160,7 @@
                   var occ = occs[k];
                   out +=
                     '<div class="survey-occ-label">Occurrence ' + escHtml(String(occ.occurrence_number)) + '</div>';
-                  out += surveyQaTableHtml(occ.qa || []);
+                  out += surveyQaTableHtml(occ.qa || [], row.session_id);
                 }
               }
               out += '</div>';
@@ -1824,7 +2265,11 @@
             for (var i = 0; i < slice.length; i++) {
               var cols = renderRow(slice[i]);
               var tr = document.createElement('tr');
+              var rowUid = String(slice[i].user_id || '');
+              tr.dataset.uid = rowUid;
+              if (selected.has(rowUid)) tr.classList.add('is-selected');
               tr.innerHTML =
+                '<td class="col-select"><input type="checkbox" class="row-select" aria-label="Select ' + escHtml(rowUid) + '"' + (selected.has(rowUid) ? ' checked' : '') + '></td>' +
                 '<td class="col-user">' + cols.user + '</td>' +
                 '<td class="col-status">' + cols.status + '</td>' +
                 '<td class="col-condition">' + cols.condition + '</td>' +
@@ -1842,10 +2287,101 @@
                 '<td class="col-actions">' + cols.actions + '</td>';
               tbody.appendChild(tr);
             }
+            syncSelectionUi();
             var remaining = filtered.length - shownCount;
             showMoreBtn.disabled = remaining <= 0;
             showMoreBtn.textContent = remaining <= 0 ? 'All shown' : 'Show more (' + Math.min(pageSize, remaining) + ')';
           }
+
+          // ── Multi-select: delete several students' data at once ──────────────────
+          var selected = new Set();  // user ids (a student can have several session rows)
+          var bulkBar = document.getElementById('bulkBar');
+          var selectAllEl = document.getElementById('selectAllSessions');
+          function filteredUids() {
+            var seen = new Set();
+            filtered.forEach(function(r) { if (r.user_id) seen.add(String(r.user_id)); });
+            return Array.from(seen);
+          }
+          function syncSelectionUi() {
+            var uids = filteredUids();
+            var nSel = uids.filter(function(u) { return selected.has(u); }).length;
+            selectAllEl.checked = uids.length > 0 && nSel === uids.length;
+            selectAllEl.indeterminate = nSel > 0 && nSel < uids.length;
+            document.getElementById('bulkCount').textContent = selected.size;
+            document.getElementById('bulkNoun').textContent = selected.size === 1 ? 'student' : 'students';
+            var allBtn = document.getElementById('bulkSelectAll');
+            allBtn.textContent = 'Select all ' + uids.length + (q || onlyCompleted ? ' matching' : '');
+            allBtn.hidden = nSel === uids.length;
+            var show = selected.size > 0;
+            if (show && bulkBar.classList.contains('hidden')) {
+              bulkBar.classList.remove('hidden');
+              UIMotion.enter([bulkBar], { distance: -6 });
+            } else if (!show) {
+              bulkBar.classList.add('hidden');
+            }
+            tbody.querySelectorAll('tr[data-uid]').forEach(function(tr) {
+              var on = selected.has(tr.dataset.uid);
+              tr.classList.toggle('is-selected', on);
+              var cb = tr.querySelector('.row-select');
+              if (cb) cb.checked = on;
+            });
+          }
+          tbody.addEventListener('change', function(ev) {
+            var cb = ev.target;
+            if (!cb.classList || !cb.classList.contains('row-select')) return;
+            var uid = cb.closest('tr').dataset.uid;
+            if (cb.checked) selected.add(uid); else selected.delete(uid);
+            syncSelectionUi();
+          });
+          selectAllEl.addEventListener('change', function() {
+            filteredUids().forEach(function(u) { if (selectAllEl.checked) selected.add(u); else selected.delete(u); });
+            syncSelectionUi();
+          });
+          document.getElementById('bulkSelectAll').addEventListener('click', function() {
+            filteredUids().forEach(function(u) { selected.add(u); });
+            syncSelectionUi();
+          });
+          document.getElementById('bulkClear').addEventListener('click', function() {
+            selected.clear();
+            syncSelectionUi();
+          });
+          document.getElementById('bulkDelete').addEventListener('click', function() {
+            var uids = Array.from(selected);
+            if (!uids.length) return;
+            var btn = this;
+            var preview = uids.slice(0, 6).join('\n') + (uids.length > 6 ? '\n… and ' + (uids.length - 6) + ' more' : '');
+            UIMotion.confirm({
+              title: 'Delete data for ' + uids.length + ' student' + (uids.length === 1 ? '' : 's') + '?',
+              message: 'All of their sessions, code, surveys and activity logs for this quiz are removed from the database. This cannot be undone.',
+              item: preview,
+              confirmText: 'Delete ' + uids.length + ' student' + (uids.length === 1 ? '' : 's'),
+            }).then(function(ok) {
+              if (!ok) return;
+              var restore = UIMotion.busy(btn, 'Deleting ' + uids.length + '…');
+              fetch('/instructor/quiz/' + encodeURIComponent(quizId) + '/analytics-delete-user', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user_ids: uids }),
+              })
+                .then(function(r) { return r.json().then(function(j) { return { ok: r.ok, j: j }; }); })
+                .then(function(x) {
+                  if (!x.ok || !x.j.success) throw new Error(x.j && x.j.error ? x.j.error : 'Delete failed');
+                  var rows = Array.prototype.filter.call(tbody.querySelectorAll('tr[data-uid]'), function(tr) { return selected.has(tr.dataset.uid); });
+                  return Promise.all(rows.map(function(tr, i) {
+                    return new Promise(function(res) { setTimeout(res, Math.min(i, 10) * 50); }).then(function() { return UIMotion.remove(tr); });
+                  })).then(function() {
+                    UIMotion.toast('Deleted data for ' + uids.length + ' student' + (uids.length === 1 ? '' : 's') + '. Updating charts…', 'success');
+                    setTimeout(reloadFresh, 900);
+                  });
+                })
+                .catch(function(err) {
+                  restore();
+                  UIMotion.shake(bulkBar);
+                  UIMotion.toast((err && err.message) || 'Delete failed', 'error');
+                });
+            });
+          });
 
           searchEl.addEventListener('input', function() {
             q = this.value || '';
@@ -1873,28 +2409,40 @@
               var enc = t.getAttribute('data-user-id');
               var uid = enc ? decodeURIComponent(enc) : '';
               if (!uid) return;
-              if (!confirm('Delete all stored Firebase data for user "' + uid + '" in this quiz? This cannot be undone.')) return;
-              fetch('/instructor/quiz/' + encodeURIComponent(quizId) + '/analytics-delete-user', {
-                method: 'POST',
-                credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ user_id: uid }),
-              })
-                .then(function(r) {
-                  return r.json().then(function(j) {
-                    return { ok: r.ok, j: j };
+              var row = t.closest('tr');
+              UIMotion.confirm({
+                title: 'Delete this student\'s data?',
+                message: 'All of their sessions, code, surveys and activity logs for this quiz are removed from the database. This cannot be undone.',
+                item: uid,
+                confirmText: 'Delete data',
+              }).then(function(ok) {
+                if (!ok) return;
+                var restore = UIMotion.busy(t, 'Deleting…');
+                fetch('/instructor/quiz/' + encodeURIComponent(quizId) + '/analytics-delete-user', {
+                  method: 'POST',
+                  credentials: 'same-origin',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ user_id: uid }),
+                })
+                  .then(function(r) {
+                    return r.json().then(function(j) {
+                      return { ok: r.ok, j: j };
+                    });
+                  })
+                  .then(function(x) {
+                    if (!x.ok || !x.j.success) throw new Error(x.j && x.j.error ? x.j.error : 'Delete failed');
+                    return UIMotion.remove(row).then(function() {
+                      UIMotion.toast('Deleted data for ' + uid + '. Updating charts…', 'success');
+                      // Charts and totals are computed on the server; reload them without the cache.
+                      setTimeout(reloadFresh, 900);
+                    });
+                  })
+                  .catch(function(err) {
+                    restore();
+                    UIMotion.shake(row);
+                    UIMotion.toast((err && err.message) || 'Delete failed', 'error');
                   });
-                })
-                .then(function(x) {
-                  if (!x.ok || !x.j.success) {
-                    alert(x.j && x.j.error ? x.j.error : 'Delete failed');
-                    return;
-                  }
-                  location.reload();
-                })
-                .catch(function() {
-                  alert('Delete failed');
-                });
+              });
             });
           }
 

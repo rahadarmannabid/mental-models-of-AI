@@ -1,0 +1,80 @@
+[
+  {
+    "id": "demo_academic_level",
+    "question": "What is your current academic level?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "First-year undergraduate",
+      "Second-year undergraduate",
+      "Third-year undergraduate",
+      "Fourth-year undergraduate"
+    ],
+    "allow_other": true,
+    "help_text": ""
+  },
+  {
+    "id": "demo_programming_experience",
+    "question": "How much programming experience do you have?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "No prior experience",
+      "Less than 1 year",
+      "1–2 years",
+      "3–4 years",
+      "5 years or more"
+    ],
+    "help_text": ""
+  },
+  {
+    "id": "demo_ai_frequency",
+    "question": "How frequently do you use AI tools to assist with programming?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Never",
+      "Rarely (less than once a month)",
+      "Sometimes (1–3 times a week)",
+      "Often (4–6 times a week)",
+      "Very often (daily or almost daily)"
+    ],
+    "help_text": ""
+  },
+  {
+    "id": "demo_ai_tools",
+    "question": "Which AI programming tools do you use?",
+    "type": "checkboxes",
+    "required": true,
+    "options": [
+      "ChatGPT or Gemini",
+      "Claude or Claude Code",
+      "GitHub Copilot",
+      "Cursor or Windsurf"
+    ],
+    "allow_other": true,
+    "other_label": "Other AI programming tools (please specify)",
+    "help_text": "Select all that apply."
+  },
+  {
+    "id": "demo_ai_tasks",
+    "question": "How frequently do you use AI tools for the following programming tasks?",
+    "type": "matrix",
+    "required": true,
+    "rows": [
+      "Generating code",
+      "Explaining code",
+      "Debugging code",
+      "Completing or suggesting code",
+      "Writing tests"
+    ],
+    "columns": [
+      "Never",
+      "Rarely",
+      "Sometimes",
+      "Often",
+      "Very often"
+    ],
+    "help_text": "Select one response for each task."
+  }
+]

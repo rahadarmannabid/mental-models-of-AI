@@ -1,256 +1,80 @@
 [
   {
-    "id": "pre_demo_q1",
-    "question": "What is your current education level?",
+    "id": "demo_academic_level",
+    "question": "What is your current academic level?",
     "type": "multiple_choice",
     "required": true,
     "options": [
-      "1st year",
-      "2nd year",
-      "3rd year",
-      "4th year"
+      "First-year undergraduate",
+      "Second-year undergraduate",
+      "Third-year undergraduate",
+      "Fourth-year undergraduate"
+    ],
+    "allow_other": true,
+    "help_text": ""
+  },
+  {
+    "id": "demo_programming_experience",
+    "question": "How much programming experience do you have?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "No prior experience",
+      "Less than 1 year",
+      "1–2 years",
+      "3–4 years",
+      "5 years or more"
     ],
     "help_text": ""
   },
   {
-    "id": "pre_demo_q2",
-    "question": "How much experience do you have in programming?",
-    "type": "multiple_choice",
-    "required": true,
-    "options": [
-      "No prior programming experience",
-      "Novice (less than 6 months)",
-      "Intermediate (6–24 months)",
-      "Advanced (2–4 years)",
-      "Expert (4+ years)"
-    ],
-    "help_text": ""
-  },
-  {
-    "id": "pre_demo_q3",
-    "question": "How frequently do you use AI autocompletion tools like GitHub Copilot to increase productivity?",
+    "id": "demo_ai_frequency",
+    "question": "How frequently do you use AI tools to assist with programming?",
     "type": "multiple_choice",
     "required": true,
     "options": [
       "Never",
-      "Rarely (once a month or less)",
-      "Occasionally (a few times a month)",
-      "Frequently (a few times a week)",
-      "Very frequently (daily or almost daily)"
+      "Rarely (less than once a month)",
+      "Sometimes (1–3 times a week)",
+      "Often (4–6 times a week)",
+      "Very often (daily or almost daily)"
     ],
-    "help_text": "",
-    "image": {
-      "src": "github-copilot-animation.gif"
-    }
-  },
-  {
-    "id": "pre_mental_q1",
-    "question": "Please describe in your own words, how GitHub Copilot generates code suggestions.",
-    "type": "open_ended",
-    "required": true,
-    "options": [],
-    "help_text": "",
-    "placeholder": "Explain your understanding...",
-    "min_length": 30,
-    "max_length": 1000
-  },
-  {
-    "id": "pre_mental_q2",
-    "question": "Where do you think GitHub Copilot obtains the contextual information it uses to generate the next lines of code?",
-    "type": "open_ended",
-    "required": true,
-    "options": [],
-    "help_text": "",
-    "placeholder": "Describe how you think context is used...",
-    "min_length": 30,
-    "max_length": 1000
-  },
-  {
-    "id": "pre_mental_q3",
-    "question": "Please describe what might cause GitHub Copilot's code suggestions to be incorrect.",
-    "type": "open_ended",
-    "required": true,
-    "options": [],
-    "help_text": "",
-    "placeholder": "Describe potential causes...",
-    "min_length": 30,
-    "max_length": 1000
-  },
-  {
-    "id": "pre_mental_q4",
-    "question": "Why might GitHub Copilot's interpretation of your goal differ from your original intention?",
-    "type": "open_ended",
-    "required": true,
-    "options": [],
-    "help_text": "",
-    "placeholder": "Describe possible reasons...",
-    "min_length": 30,
-    "max_length": 1000
-  },
-  {
-    "id": "pre_trust_open",
-    "question": "Please describe why you trust or distrust GitHub Copilot. Give some examples.",
-    "type": "open_ended",
-    "required": true,
-    "options": [],
-    "help_text": "",
-    "placeholder": "Describe your trust or distrust with examples...",
-    "min_length": 30,
-    "max_length": 1000
-  },
-  {
-    "id": "pre_trust_q1",
-    "question": "GitHub Copilot is very reliable. I can trust it to be correct all the time.",
-    "type": "likert",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
     "help_text": ""
   },
   {
-    "id": "pre_trust_q2",
-    "question": "I am confident in GitHub Copilot. I feel that it works well.",
-    "type": "likert",
+    "id": "demo_ai_tools",
+    "question": "Which AI programming tools do you use?",
+    "type": "checkboxes",
     "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
-    "help_text": ""
+    "options": [
+      "ChatGPT or Gemini",
+      "Claude or Claude Code",
+      "GitHub Copilot",
+      "Cursor or Windsurf"
+    ],
+    "allow_other": true,
+    "other_label": "Other AI programming tools (please specify)",
+    "help_text": "Select all that apply."
   },
   {
-    "id": "pre_trust_q3",
-    "question": "The outputs of GitHub Copilot are very predictable.",
-    "type": "likert",
+    "id": "demo_ai_tasks",
+    "question": "How frequently do you use AI tools for the following programming tasks?",
+    "type": "matrix",
     "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
-    "help_text": ""
-  },
-  {
-    "id": "pre_trust_q4",
-    "question": "I feel safe that when I rely on GitHub Copilot I will get the right answers.",
-    "type": "likert",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
-    "help_text": ""
-  },
-  {
-    "id": "pre_trust_q5",
-    "question": "GitHub Copilot is efficient and works very quickly.",
-    "type": "likert",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
-    "help_text": ""
-  },
-  {
-    "id": "pre_trust_q6",
-    "question": "I am wary of GitHub Copilot.",
-    "type": "likert",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
-    "help_text": ""
-  },
-  {
-    "id": "pre_trust_q7",
-    "question": "GitHub Copilot can perform the task better than a novice human user.",
-    "type": "likert",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
-    "help_text": ""
-  },
-  {
-    "id": "pre_trust_q8",
-    "question": "I like using GitHub Copilot for decision making.",
-    "type": "likert",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
-    "help_text": ""
-  },
-  {
-    "id": "pre_accuracy_q1",
-    "question": "How accurate do you believe GitHub Copilot generated code suggestions are?",
-    "type": "slider",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 0,
-      "max": 100,
-      "step": 5,
-      "default": 50,
-      "unit": "%"
-    },
-    "help_text": "0% = completely inaccurate, 100% = perfectly accurate"
-  },
-  {
-    "id": "pre_impact_q1",
-    "question": "How do you think GitHub Copilot generated code suggestions affect your ability to correctly complete programming assignments?",
-    "type": "likert",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Hinder greatly",
-      "maxLabel": "Help greatly"
-    },
-    "help_text": ""
-  },
-  {
-    "id": "pre_impact_q2",
-    "question": "GitHub Copilot appeared to understand my goals really well.",
-    "type": "likert",
-    "required": true,
-    "options": [],
-    "scale": {
-      "min": 1,
-      "max": 5,
-      "minLabel": "Strongly disagree",
-      "maxLabel": "Strongly agree"
-    },
-    "help_text": ""
+    "rows": [
+      "Generating code",
+      "Explaining code",
+      "Debugging code",
+      "Completing or suggesting code",
+      "Writing tests"
+    ],
+    "columns": [
+      "Never",
+      "Rarely",
+      "Sometimes",
+      "Often",
+      "Very often"
+    ],
+    "help_text": "Select one response for each task."
   }
 ]

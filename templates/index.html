@@ -6,6 +6,8 @@
     <title>CodeOracle</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="/static/diagram-widget.js"></script>
+    <script src="/static/ui-motion.js"></script>
     <style>
         * {
             margin: 0;
@@ -1339,6 +1341,16 @@
     background: linear-gradient(135deg, #2a2a2b, #323234);
 }
 
+.survey-other-text {
+    width: 100%; margin: 4px 0 6px; padding: 8px 10px; border-radius: 6px;
+    background: #1e1e1e; color: #d4d4d4; border: 1px solid #444; font-size: 14px;
+}
+.survey-matrix-wrap { overflow-x: auto; margin-top: 8px; }
+.survey-matrix { width: 100%; border-collapse: collapse; font-size: 13px; color: #ccc; }
+.survey-matrix th, .survey-matrix td { padding: 8px 6px; border-bottom: 1px solid #333; text-align: center; }
+.survey-matrix thead th { color: #999; font-weight: 500; }
+.survey-matrix tbody th { text-align: left; font-weight: 400; min-width: 140px; }
+.survey-matrix td { cursor: pointer; }
 .survey-question-text {
     color: #cccccc;
     font-size: 12px;
@@ -1680,6 +1692,33 @@
     gap: 20px;
     align-items: flex-start;
 }
+
+/* Diagram questions get a page of their own: hide the AI history and use the full width. */
+.survey-modal--diagram .survey-container { max-width: 1200px; }
+.survey-modal--diagram .ai-history-panel { display: none; }
+.survey-modal--diagram .survey-questions-panel { flex: 1 1 100%; max-width: 100%; }
+
+.survey-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    margin-bottom: 14px;
+}
+
+.survey-pager-btn {
+    background: transparent;
+    color: #d4d4d4;
+    border: 1px solid #555;
+    border-radius: 6px;
+    padding: 8px 22px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.survey-pager-btn:hover:not(:disabled) { border-color: #888; }
+.survey-pager-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.survey-pager-label { color: #888; font-size: 13px; min-width: 44px; text-align: center; }
 
 .ai-history-panel {
     flex: 0 0 35%;
@@ -2325,7 +2364,6 @@
     <div class="survey-container">
         <div class="survey-header">
             <h2>Quick Survey</h2>
-            <p>Please rate your agreement with the following statements:</p>
         </div>
         
         <div class="survey-content">
@@ -2336,7 +2374,6 @@
             
             <div class="survey-controls">
                 <button id="submitSurvey" class="survey-submit-btn" disabled>Submit Survey</button>
-                <p class="survey-note">You must answer all questions to continue coding.</p>
             </div>
         </div>
     </div>
@@ -3236,6 +3273,7 @@ var ALLOWED_ACTIVITY_TYPES = {
     // Condition 2: inline ghost-text suggestions (ai_modes.js)
     inline_suggestion_shown: true,
     inline_suggestion_accepted: true,
+    inline_suggestion_dismissed: true,
     // Condition 3: coding agent (ai_modes.js)
     agent_panel_opened: true,
     agent_mode_changed: true,
@@ -3251,6 +3289,9 @@ var ALLOWED_ACTIVITY_TYPES = {
     agent_skill_deleted: true,
     // Workspace + terminal (workspace.js, terminal.js)
     terminal_command: true,
+    package_command: true,
+    tab_switching: true,
+    manual_save_shortcut: true,
     file_created: true,
     file_renamed: true,
     file_deleted: true
@@ -5324,10 +5365,7 @@ function showPeriodicSurvey() {
         surveyHeader.textContent = `Periodic Survey #${surveyData.periodicSurveyOccurrenceCount}`;
     }
     
-    const surveyDescription = document.querySelector('#surveyModal .survey-header p');
-    if (surveyDescription) {
-        surveyDescription.textContent = `Please rate your current experience with the AI assistant (Survey ${surveyData.periodicSurveyOccurrenceCount} of approximately ${Math.ceil(surveyData.analysisCount / surveyData.surveyInterval)} total)`;
-    }
+
     
     // Show modal
     document.getElementById('surveyModal').classList.remove('hidden');
@@ -5393,6 +5431,10 @@ function surveyImageUrlFromSrc(src) {
     return '/survey-images/' + encodeURIComponent(t);
 }
 
+function surveyEsc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function generateSurveyHTML(questions) {
     return questions.map((question, index) => {
         // Support both simple string questions and rich question objects
@@ -5421,11 +5463,32 @@ function generateSurveyHTML(questions) {
             const maxLen = q.max_length || 1000;
             inputHTML = `<textarea class="survey-textarea" name="question_${index}" placeholder="${q.placeholder || 'Enter your response...'}" maxlength="${maxLen}" style="width:100%;min-height:80px;padding:10px;background:#1e1e1e;color:#d4d4d4;border:1px solid #444;border-radius:6px;font-size:14px;resize:vertical;margin-top:8px;" data-min-length="${minLen}"></textarea>
                 <div class="char-counter" style="font-size:11px;color:#888;margin-top:4px;">0 / ${maxLen}${minLen > 0 ? ` (min ${minLen})` : ''}</div>`;
-        } else if (q.type === 'multiple_choice' && q.options) {
+        } else if ((q.type === 'multiple_choice' || q.type === 'checkboxes') && q.options) {
+            // Single choice keeps storing the option index; checkboxes store the option texts.
+            const multi = q.type === 'checkboxes';
+            const kind = multi ? 'checkbox' : 'radio';
             inputHTML = '<div style="margin-top:8px;">' + q.options.map((opt, oi) => `
                 <label style="display:block;padding:6px 0;cursor:pointer;color:#ccc;">
-                    <input type="radio" name="question_${index}" value="${oi}"> ${opt}
-                </label>`).join('') + '</div>';
+                    <input type="${kind}" name="question_${index}" value="${multi ? surveyEsc(opt) : oi}"> ${opt}
+                </label>`).join('');
+            if (q.allow_other) {
+                inputHTML += `
+                <label style="display:block;padding:6px 0;cursor:pointer;color:#ccc;">
+                    <input type="${kind}" name="question_${index}" value="__other__"> ${surveyEsc(q.other_label || 'Other (please specify)')}
+                </label>
+                <input type="text" class="survey-other-text" name="question_${index}_other" maxlength="200" placeholder="Please specify">`;
+            }
+            inputHTML += '</div>';
+        } else if (q.type === 'matrix') {
+            const cols = q.columns || [];
+            inputHTML = '<div class="survey-matrix-wrap"><table class="survey-matrix"><thead><tr><th></th>' +
+                cols.map(c => `<th>${surveyEsc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+                (q.rows || []).map((row, ri) => `<tr data-row="${surveyEsc(row)}"><th scope="row">${surveyEsc(row)}</th>` +
+                    cols.map(c => `<td><input type="radio" name="question_${index}_r${ri}" value="${surveyEsc(c)}" aria-label="${surveyEsc(row + ': ' + c)}"></td>`).join('') +
+                    '</tr>').join('') +
+                '</tbody></table></div>';
+        } else if (q.type === 'diagram') {
+            inputHTML = `<div class="diagram-q-mount" data-q-index="${index}"></div>`;
         } else if (q.type === 'slider') {
             const scale = q.scale || {min:0,max:100,step:5,default:50};
             inputHTML = `<div style="margin-top:8px;"><input type="range" name="question_${index}" min="${scale.min}" max="${scale.max}" step="${scale.step||1}" value="${scale.default||50}" style="width:100%;" oninput="this.nextElementSibling.textContent=this.value+'${scale.unit||''}'"><span style="color:#ccc;font-size:13px;">${scale.default||50}${scale.unit||''}</span></div>`;
@@ -5449,7 +5512,7 @@ function generateSurveyHTML(questions) {
         }
         const qLine = `<div class="survey-question-text">Q${index + 1}: ${q.question}${reqMark}</div>`;
 
-        return `<div class="survey-question" data-required="${isRequired}" data-question-id="${q.id || 'q_'+index}">
+        return `<div class="survey-question" data-required="${isRequired}" data-type="${surveyEsc(q.type || '')}" data-question-id="${q.id || 'q_'+index}">
             ${qLine}${imageHTML}${inputHTML}
         </div>`;
     }).join('');
@@ -5603,6 +5666,153 @@ function generateAIHistoryDisplayHTML(aiHistoryContext) {
 
 
 
+/** survey question index -> DiagramWidget for diagram questions in the recurrent/final survey modal */
+let periodicDiagramWidgets = {};
+
+function mountPeriodicDiagramWidgets(questionsPanel, onChange) {
+    Object.values(periodicDiagramWidgets).forEach(w => w.destroy());
+    periodicDiagramWidgets = {};
+    questionsPanel.querySelectorAll('.diagram-q-mount').forEach(mount => {
+        const i = parseInt(mount.dataset.qIndex, 10);
+        const q = surveyData.questions[i];
+        if (!q || typeof q !== 'object') return;
+        if (!window.DiagramWidget) {
+            mount.textContent = 'The drawing tool could not be loaded. Please reload the page.';
+            return;
+        }
+        const qid = String(q.id || `q_${i}`);
+        const pi = typeof currentSession.currentProblemIndex === 'number' ? currentSession.currentProblemIndex : 0;
+        const occurrence = surveyData.periodicSurveyOccurrenceCount || 0;
+        periodicDiagramWidgets[i] = window.DiagramWidget.mount(mount, {
+            question: q,
+            large: true,
+            // No occurrence in the key: a reload mid-survey must find the draft; it is cleared on submit.
+            storageKey: `diagramDraft_${currentSession.sessionId}_rec_p${pi}_${qid}`,
+            saveUrl: '/diagram/save',
+            saveContext: {
+                session_id: currentSession.sessionId,
+                user_id: currentSession.userId,
+                context: 'recurrent',
+                problem_index: pi,
+                occurrence: occurrence,
+                question_id: qid
+            },
+            onChange: onChange
+        });
+    });
+}
+
+/** Save diagrams with unsaved work before the survey is submitted. Returns false if a save failed. */
+async function savePeriodicDiagramWidgets() {
+    for (const w of Object.values(periodicDiagramWidgets)) {
+        if (!w.isDirty() || w.isEmpty()) continue;
+        if (!(await w.save())) {
+            alert('A diagram could not be saved to the server. Check your connection and try again.');
+            return false;
+        }
+    }
+    return true;
+}
+
+function finishPeriodicDiagramWidgets() {
+    Object.values(periodicDiagramWidgets).forEach(w => { w.clearDraft(); w.destroy(); });
+    periodicDiagramWidgets = {};
+}
+
+/** Whether one rendered survey question (a .survey-question div) has an answer. */
+function isSurveyQuestionDivAnswered(div) {
+    const diagramMount = div.querySelector('.diagram-q-mount');
+    if (diagramMount) {
+        // Drawn but unsaved counts: moving on or submitting saves it.
+        const w = periodicDiagramWidgets[diagramMount.dataset.qIndex];
+        return !!(w && (w.getAnswer() || !w.isEmpty()));
+    }
+    const otherBox = div.querySelector('.survey-other-text');
+    const otherPicked = !!div.querySelector('input[value="__other__"]:checked');
+    if (otherPicked && !(otherBox && otherBox.value.trim())) return false;
+    if (div.dataset.type === 'matrix') {
+        const rows = div.querySelectorAll('tbody tr');
+        return rows.length > 0 && Array.from(rows).every(tr => tr.querySelector('input:checked'));
+    }
+    if (div.dataset.type === 'checkboxes') return !!div.querySelector('input[type="checkbox"]:checked');
+    if (div.querySelector('input[type="radio"]:checked') || div.querySelector('input[type="range"]')) return true;
+    const textarea = div.querySelector('textarea');
+    if (textarea) {
+        const minLen = parseInt(textarea.dataset.minLength) || 0;
+        return textarea.value.trim().length >= Math.max(minLen, 1);
+    }
+    return false;
+}
+
+/** Split the survey into pages: each diagram question alone, other questions grouped. */
+function setupPeriodicSurveyPages(modal, questionsPanel, submitButton) {
+    const pages = [];
+    let group = null;
+    questionsPanel.querySelectorAll('.survey-question').forEach(div => {
+        if (div.querySelector('.diagram-q-mount')) {
+            pages.push([div]);
+            group = null;
+        } else {
+            if (!group) { group = []; pages.push(group); }
+            group.push(div);
+        }
+    });
+    if (!pages.length) pages.push([]);
+
+    let nav = modal.querySelector('.survey-pager');
+    if (!nav) {
+        nav = document.createElement('div');
+        nav.className = 'survey-pager';
+        nav.innerHTML = '<button type="button" class="survey-pager-btn survey-pager-back">Back</button>' +
+            '<span class="survey-pager-label"></span>' +
+            '<button type="button" class="survey-pager-btn survey-pager-next">Next</button>';
+        submitButton.parentElement.insertBefore(nav, submitButton);
+    }
+    const back = nav.querySelector('.survey-pager-back');
+    const next = nav.querySelector('.survey-pager-next');
+    const label = nav.querySelector('.survey-pager-label');
+    let current = 0;
+
+    function show(i) {
+        current = Math.max(0, Math.min(pages.length - 1, i));
+        pages.forEach((page, pi) => page.forEach(div => { div.style.display = pi === current ? '' : 'none'; }));
+        const onDiagram = pages[current].some(div => div.querySelector('.diagram-q-mount'));
+        modal.classList.toggle('survey-modal--diagram', onDiagram);
+        const multi = pages.length > 1;
+        const last = current === pages.length - 1;
+        nav.style.display = multi ? '' : 'none';
+        back.disabled = current === 0;
+        next.disabled = last;
+        submitButton.style.display = last ? '' : 'none';
+        label.textContent = multi ? `${current + 1} / ${pages.length}` : '';
+        const scroller = modal.querySelector('.survey-container');
+        if (scroller) scroller.scrollTop = 0;
+    }
+
+    back.onclick = () => show(current - 1);
+    next.onclick = async () => {
+        const missing = pages[current].find(div => div.dataset.required !== 'false' && !isSurveyQuestionDivAnswered(div));
+        if (missing) {
+            alert('Please answer the required questions on this page.');
+            return;
+        }
+        for (const div of pages[current]) {
+            const mount = div.querySelector('.diagram-q-mount');
+            const w = mount ? periodicDiagramWidgets[mount.dataset.qIndex] : null;
+            if (!w || !w.isDirty() || w.isEmpty()) continue;
+            next.disabled = true;
+            const answer = await w.save();
+            next.disabled = false;
+            if (!answer) {
+                alert('Your diagram could not be saved. Check your connection and try again.');
+                return;
+            }
+        }
+        show(current + 1);
+    };
+    show(0);
+}
+
 function setupSurveyEventListeners(modalId, submitButtonId, submitFunction) {
     const modal = document.getElementById(modalId);
     const submitButton = document.getElementById(submitButtonId);
@@ -5611,29 +5821,33 @@ function setupSurveyEventListeners(modalId, submitButtonId, submitFunction) {
     const questionsPanel = document.getElementById(questionsPanelId);
 
     function checkSurveyCompletion() {
-        const questionDivs = questionsPanel.querySelectorAll('.survey-question');
-        let allRequiredAnswered = true;
-        questionDivs.forEach(div => {
-            const isRequired = div.dataset.required !== 'false';
-            if (!isRequired) return;
-            const radio = div.querySelector('input[type="radio"]:checked');
-            const textarea = div.querySelector('textarea');
-            const range = div.querySelector('input[type="range"]');
-            if (radio || range) return; // radio checked or range always has value
-            if (textarea) {
-                const minLen = parseInt(textarea.dataset.minLength) || 0;
-                if (textarea.value.trim().length < Math.max(minLen, 1)) allRequiredAnswered = false;
-                return;
-            }
-            // No input answered
-            allRequiredAnswered = false;
-        });
+        const questionDivs = Array.from(questionsPanel.querySelectorAll('.survey-question'));
+        const allRequiredAnswered = questionDivs.every(div =>
+            div.dataset.required === 'false' || isSurveyQuestionDivAnswered(div));
         submitButton.disabled = !allRequiredAnswered;
     }
 
     // Listen for changes on all inputs
-    questionsPanel.querySelectorAll('input[type="radio"]').forEach(radio => {
-        radio.addEventListener('change', checkSurveyCompletion);
+    questionsPanel.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach(input => {
+        input.addEventListener('change', () => {
+            const box = input.closest('.survey-question').querySelector('.survey-other-text');
+            if (box) {
+                const on = !!input.closest('.survey-question').querySelector('input[value="__other__"]:checked');
+                box.style.display = on ? 'block' : 'none';
+                if (on && input.value === '__other__') box.focus();
+            }
+            checkSurveyCompletion();
+        });
+    });
+    questionsPanel.querySelectorAll('.survey-other-text').forEach(box => {
+        box.style.display = 'none';
+        box.addEventListener('input', checkSurveyCompletion);
+    });
+    questionsPanel.querySelectorAll('.survey-matrix td').forEach(td => {
+        td.addEventListener('click', e => {
+            const radio = td.querySelector('input');
+            if (radio && e.target !== radio) { radio.checked = true; radio.dispatchEvent(new Event('change')); }
+        });
     });
     questionsPanel.querySelectorAll('textarea').forEach(ta => {
         ta.addEventListener('input', function() {
@@ -5648,11 +5862,15 @@ function setupSurveyEventListeners(modalId, submitButtonId, submitFunction) {
         });
     });
 
+    mountPeriodicDiagramWidgets(questionsPanel, checkSurveyCompletion);
+    setupPeriodicSurveyPages(modal, questionsPanel, submitButton);
+
     submitButton.onclick = submitFunction;
     checkSurveyCompletion();
 }
 
 async function submitPeriodicSurvey() {
+    if (!(await savePeriodicDiagramWidgets())) return;
     const responses = collectSurveyResponses('surveyModal');
     // Check all required questions are answered
     const requiredCount = surveyData.questions.filter(q => typeof q === 'string' || q.required !== false).length;
@@ -5679,6 +5897,7 @@ async function submitPeriodicSurvey() {
         
         // ✅ NEW: Save to sessionStorage immediately
         savePeriodicSurveysToStorage();
+        finishPeriodicDiagramWidgets();
         // Clear the snapshot
         surveyData.currentSurveyAISnapshot = null;
         
@@ -5698,6 +5917,7 @@ async function submitPeriodicSurvey() {
 }
 
 async function submitFinalSurvey() {
+    if (!(await savePeriodicDiagramWidgets())) return;
     const responses = collectSurveyResponses('surveyModal');
     const requiredCount = surveyData.questions.filter(q => typeof q === 'string' || q.required !== false).length;
     const answeredRequired = responses.filter(r => r.required !== false && r.response !== null).length;
@@ -5731,6 +5951,7 @@ async function submitFinalSurvey() {
         
         // ✅ Save to sessionStorage before navigating away
         savePeriodicSurveysToStorage();
+        finishPeriodicDiagramWidgets();
         
         // Hide the modal
         document.getElementById('surveyModal').classList.add('hidden');
@@ -5922,6 +6143,51 @@ function collectSurveyResponses(modalId) {
         const q = surveyData.questions[i];
         const questionText = typeof q === 'string' ? q : q.question;
         const isRequired = typeof q === 'string' ? true : q.required !== false;
+
+        if (typeof q === 'object' && q.type === 'diagram') {
+            const w = periodicDiagramWidgets[i];
+            const answer = w ? w.getAnswer() : null;
+            if (answer || !isRequired) {
+                responses.push({
+                    question: questionText,
+                    question_id: q.id || `q_${i}`,
+                    response: answer,
+                    required: isRequired
+                });
+            }
+            continue;
+        }
+
+        if (typeof q === 'object' && (q.type === 'checkboxes' || q.type === 'matrix' || q.allow_other)) {
+            const div = modal.querySelectorAll('#' + (modalId === 'surveyModal' ? 'surveyQuestions' : 'finalSurveyQuestions') + ' .survey-question')[i];
+            let value = null;
+            const otherBox = div && div.querySelector('.survey-other-text');
+            const otherText = otherBox ? otherBox.value.trim() : '';
+            if (div && q.type === 'checkboxes') {
+                const picked = Array.from(div.querySelectorAll('input[type="checkbox"]:checked'))
+                    .map(cb => cb.value === '__other__' ? `Other: ${otherText}` : cb.value);
+                value = picked.length ? picked : null;
+            } else if (div && q.type === 'matrix') {
+                const grid = {};
+                div.querySelectorAll('tbody tr').forEach(tr => {
+                    const sel = tr.querySelector('input:checked');
+                    if (sel) grid[tr.dataset.row] = sel.value;
+                });
+                value = Object.keys(grid).length ? grid : null;
+            } else if (div) {
+                const sel = div.querySelector('input[type="radio"]:checked');
+                if (sel) value = sel.value === '__other__' ? `Other: ${otherText}` : (q.options || [])[parseInt(sel.value)] ?? sel.value;
+            }
+            if (value !== null || !isRequired) {
+                responses.push({
+                    question: questionText,
+                    question_id: q.id || `q_${i}`,
+                    response: value,
+                    required: isRequired
+                });
+            }
+            continue;
+        }
 
         const checkedRadio = modal.querySelector(`input[name="question_${i}"]:checked`);
         const textarea = modal.querySelector(`textarea[name="question_${i}"]`);
@@ -6366,7 +6632,8 @@ async function loadSurveyQuestions() {
         let url = '/survey-config';
         if (isQuiz) {
             const problemIdx = (currentSession && currentSession.currentProblemIndex) || 0;
-            url = '/survey-config/' + encodeURIComponent(assignmentKey) + '?problem_index=' + problemIdx;
+            url = '/survey-config/' + encodeURIComponent(assignmentKey) + '?problem_index=' + problemIdx
+                + (currentSession.sessionId ? '&session_id=' + encodeURIComponent(currentSession.sessionId) : '');
         }
 
         const response = await fetch(url, {
@@ -7197,7 +7464,14 @@ document.addEventListener('visibilitychange', function() {
         // User switched away from tab
         lastFocusTime = currentTime;
     } else if (newVisibilityState === 'visible' && !isTabVisible) {
-        // User returned to tab
+        // User returned to tab: one entry per switch; the server adds the time away to away_time_seconds
+        try {
+            logActivity('tab_switching', {
+                switch_type: 'tab_return',
+                away_duration_ms: Math.max(0, currentTime - lastFocusTime),
+                left_at: new Date(lastFocusTime).toISOString()
+            });
+        } catch (e) { /* ignore */ }
         if (tabTrackingEnabled) {
             // Show popup like paste notification (center popup + top banner)
             showTabReturnNotification();

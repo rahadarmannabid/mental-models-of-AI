@@ -349,9 +349,22 @@
             });
         },
         confirmDelete: function (name) {
+            var self = this;
             if (this.files.length === 1) return;
-            if (!window.confirm('Delete ' + name + '? This cannot be undone.')) return;
-            if (this.remove(name)) log('file_deleted', { filename: name, file_count: this.files.length });
+            var ask = window.UIMotion
+                ? UIMotion.confirm({ title: 'Delete this file?', message: 'Its code is removed from your workspace. This cannot be undone.', item: name, confirmText: 'Delete file' })
+                : Promise.resolve(window.confirm('Delete ' + name + '? This cannot be undone.'));
+            ask.then(function (ok) {
+                if (!ok) return;
+                var li = document.querySelector('#fileTreeList [data-file="' + (window.CSS && CSS.escape ? CSS.escape(name) : name) + '"]');
+                var gone = li && window.UIMotion ? UIMotion.remove(li) : Promise.resolve();
+                gone.then(function () {
+                    if (self.remove(name)) {
+                        log('file_deleted', { filename: name, file_count: self.files.length });
+                        if (window.UIMotion) UIMotion.toast('Deleted ' + name, 'success');
+                    }
+                });
+            });
         },
 
         render: function () {

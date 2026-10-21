@@ -22,9 +22,27 @@
         editor.updateOptions({ inlineSuggest: { enabled: true } });
         var shown = new Set();
         var cache = new Map();
+        var pending = {};  // suggestion_id -> time shown (ms), until accepted / rejected / ignored
+        var live = {};     // suggestion_id -> completion lists still holding it (cached hits are re-offered)
+        function resolve(id, decision, reason) {
+            var t = pending[id];
+            if (t === undefined) return;
+            delete pending[id];
+            log('inline_suggestion_dismissed', { suggestion_id: id, decision: decision, reason: reason, time_to_decision_ms: Date.now() - t });
+        }
         var acceptCmd = editor.addCommand(0, function (_ctx, meta) {
-            log('inline_suggestion_accepted', meta);
+            var t = pending[meta.suggestion_id];
+            delete pending[meta.suggestion_id];
+            log('inline_suggestion_accepted', Object.assign({}, meta, {
+                time_to_decision_ms: t === undefined ? null : Date.now() - t
+            }));
         }, '');
+        // Esc while ghost text is visible = explicit reject
+        editor.onKeyDown(function (e) {
+            if (e.keyCode === monaco.KeyCode.Escape) {
+                Object.keys(pending).forEach(function (id) { resolve(id, 'rejected', 'escape'); });
+            }
+        });
 
         monaco.languages.registerInlineCompletionsProvider(lang(), {
             provideInlineCompletions: async function (model, position, context, token) {
@@ -72,16 +90,21 @@
                     suggestion_id: hit.id,
                     file: activeFileName(),
                     line: position.lineNumber,
+                    column: position.column,
                     lines: hit.text.split('\n').length,
                     text: hit.text.slice(0, 2000),
                     latency_ms: hit.latency_ms
                 };
+                // Code in the IDE when the suggestion appeared (logged once, with the "shown" event)
+                var snapshot = (prefix + suffix).slice(0, 10000);
+                live[hit.id] = (live[hit.id] || 0) + 1;
                 return {
                     items: [{
                         insertText: hit.text,
                         range: new monaco.Range(position.lineNumber, position.column, position.lineNumber, position.column),
                         command: { id: acceptCmd, title: 'Accept suggestion', arguments: [meta] },
-                        _meta: meta
+                        _meta: meta,
+                        _snapshot: snapshot
                     }]
                 };
             },
@@ -89,10 +112,22 @@
                 var meta = item && item._meta;
                 if (meta && !shown.has(meta.suggestion_id)) {
                     shown.add(meta.suggestion_id);
-                    log('inline_suggestion_shown', meta);
+                    pending[meta.suggestion_id] = Date.now();
+                    log('inline_suggestion_shown', Object.assign({}, meta, { code_snapshot: item._snapshot || '' }));
                 }
             },
-            freeInlineCompletions: function () {}
+            // Monaco drops a suggestion when it no longer applies (the student kept typing or moved on).
+            // Wait briefly: on Tab the accept command can run just after this.
+            freeInlineCompletions: function (completions) {
+                (completions && completions.items || []).forEach(function (item) {
+                    var id = item._meta && item._meta.suggestion_id;
+                    if (!id) return;
+                    live[id] = Math.max(0, (live[id] || 1) - 1);
+                    setTimeout(function () {
+                        if (!live[id]) { delete live[id]; resolve(id, 'ignored', 'typed_over'); }
+                    }, 400);
+                });
+            }
         });
     }
 
@@ -179,6 +214,7 @@
         chats: [],            // [{id, title, mode, history:[{role, content}]}]
         chatId: '',
         pending: {},          // filename -> {baseline: string|null, turn_id}
+        respondedAt: {},      // turn_id -> Date.now() when the agent finished (for time to Keep/Undo)
         decorations: {},      // filename -> decoration ids
         skills: [],           // [{name, instructions, source, enabled}]
         attachedSkills: [],   // skills picked with "/" for the next message
@@ -562,11 +598,23 @@
             });
             sheet.querySelectorAll('[data-del]').forEach(function (b) {
                 b.onclick = function () {
-                    var s = self.skills.splice(+b.dataset.del, 1)[0];
-                    log('agent_skill_deleted', { name: s.name });
-                    self.saveStudentSkills();
-                    self.saveSkillToggles();
-                    self.openSkillsSheet();
+                    var skill = self.skills[+b.dataset.del];
+                    var ask = window.UIMotion
+                        ? UIMotion.confirm({ title: 'Delete this skill?', message: 'The agent will stop following it.', item: skill.name, confirmText: 'Delete skill' })
+                        : Promise.resolve(window.confirm('Delete skill ' + skill.name + '?'));
+                    ask.then(function (ok) {
+                        if (!ok) return;
+                        var row = b.closest('.agent-skill');
+                        (row && window.UIMotion ? UIMotion.remove(row) : Promise.resolve()).then(function () {
+                            var i = self.skills.indexOf(skill);
+                            if (i < 0) return;
+                            self.skills.splice(i, 1);
+                            log('agent_skill_deleted', { name: skill.name });
+                            self.saveStudentSkills();
+                            self.saveSkillToggles();
+                            self.openSkillsSheet();
+                        });
+                    });
                 };
             });
             var form = sheet.querySelector('#agentSkillForm'), show = sheet.querySelector('#agentSkillShow');
@@ -672,6 +720,7 @@
             this.abort = new AbortController();
 
             function handle(ev) {
+                if (ev.type === 'start') { turnId = ev.turn_id; return; }  // keeps "Thinking" visible
                 if (thinking) { thinking.remove(); thinking = null; }
                 if (ev.type === 'text') {
                     if (!textEl) {
@@ -739,6 +788,7 @@
             chat.history.push({ role: 'user', content: text });
             if (answer) chat.history.push({ role: 'assistant', content: answer });
             this.persist();
+            if (turnId) this.respondedAt[turnId] = Date.now();
             log('agent_response_received', { mode: mode, turn_id: turnId, length: answer.length, failed: failed });
 
             if (mode === 'plan' && answer && !failed) {
@@ -817,7 +867,9 @@
                 if (p.baseline === null) WS.remove(name, { source: 'agent_undo' });
                 else WS.set(name, p.baseline, { source: 'agent_undo' });
             }
-            log('agent_edit_decision', { filename: name, decision: decision, turn_id: p.turn_id });
+            var doneAt = this.respondedAt[p.turn_id];
+            log('agent_edit_decision', { filename: name, decision: decision, turn_id: p.turn_id,
+                time_to_decision_ms: doneAt ? Math.max(0, Date.now() - doneAt) : null });
             this.syncBadges();
             this.renderReview();
             this.refreshDecorations();

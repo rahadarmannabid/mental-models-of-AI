@@ -84,14 +84,21 @@ services:
       - SANDBOX_UID=10001
       - CODE_MAX_CONCURRENT=${CODE_MAX_CONCURRENT:-40}
       - CODE_MEMORY_MB=${CODE_MEMORY_MB:-256}
+      # `pip install` in the terminal: per-session packages on a disk volume, downloaded from PyPI
+      # through the app (this network has no internet). Removed when the student submits.
+      - SANDBOX_PKG_DIR=/var/lib/sandbox-pkgs
+      - PIP_INDEX_URL=http://runner:${RUNNER_TOKEN}@guessing_ide:8000/pypi/simple/
+      - PIP_TRUSTED_HOST=guessing_ide
+    volumes:
+      - runner_pkgs:/var/lib/sandbox-pkgs
     networks:
       - runner_network
     read_only: true
     tmpfs:
       - /tmp:size=1g,mode=1777
     pids_limit: 1024
-    mem_limit: 6g
-    cpus: 2
+    mem_limit: 8g
+    cpus: 4
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8100/health"]
@@ -101,6 +108,7 @@ services:
 
 volumes:
   redis_data:
+  runner_pkgs:
 
 networks:
   guessing_ide_network:

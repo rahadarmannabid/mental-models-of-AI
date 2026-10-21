@@ -1,0 +1,280 @@
+[
+  {
+    "id": "post_ag_open_perception",
+    "question": "What information do you think the coding agent gathers before it makes a change, and how does it get that information?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Perception"
+  },
+  {
+    "id": "post_ag_open_reasoning",
+    "question": "How do you think the agent decides which steps to take and which files to change?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Reasoning"
+  },
+  {
+    "id": "post_ag_open_learning",
+    "question": "How was the agent's underlying model trained, and what does it rely on to know about your specific project?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Learning"
+  },
+  {
+    "id": "post_ag_open_limitations",
+    "question": "When did the agent make a wrong change or get stuck, why do you think that happened, and what factors had the greatest impact?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Limitations"
+  },
+  {
+    "id": "post_ag_open_human_role",
+    "question": "How should an agent's changes and actions be reviewed, approved, and verified?",
+    "type": "open_ended",
+    "required": true,
+    "options": [],
+    "help_text": "",
+    "placeholder": "Explain your understanding...",
+    "min_length": 30,
+    "max_length": 1000,
+    "category": "Human Role"
+  },
+  {
+    "id": "post_ag_understanding",
+    "question": "How well do you understand how the AI programming tools you use work?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Not at all",
+      "Slightly",
+      "Moderately",
+      "Very well",
+      "Extremely well"
+    ],
+    "help_text": ""
+  },
+  {
+    "id": "post_ag_quiz_q1",
+    "question": "During the task, what did the agent use to decide what to do?",
+    "type": "checkboxes",
+    "required": true,
+    "options": [
+      "Your typed request",
+      "Files it opened and read with its tools",
+      "Output of commands it ran, such as test results",
+      "Everything on your computer, automatically",
+      "Details of your goal that you never wrote down"
+    ],
+    "help_text": "Select all that apply.",
+    "competency": "15: Sensors",
+    "correct_answers": [
+      "Your typed request",
+      "Files it opened and read with its tools",
+      "Output of commands it ran, such as test results"
+    ],
+    "explanation": "The agent only knows what you tell it and what its tools bring back. It cannot see anything else."
+  },
+  {
+    "id": "post_ag_quiz_q2",
+    "question": "Your project has 500 files. Before editing, how does the agent know what's in them?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "It already has the whole project memorized",
+      "It searches for and opens the files it judges relevant, one step at a time",
+      "It downloads your project from GitHub",
+      "It reads every file each time you send a message"
+    ],
+    "help_text": "",
+    "competency": "15: Sensors",
+    "correct_answers": [
+      "It searches for and opens the files it judges relevant, one step at a time"
+    ],
+    "explanation": "The agent can hold only a limited amount at once, so it reads selectively and can miss a relevant file."
+  },
+  {
+    "id": "post_ag_quiz_q3",
+    "question": "You give the same request, “add a discount function”, twice. The first time the project has a rules file (such as CLAUDE.md or .cursorrules) that says “round money with Math.round”; the second time it doesn't. What happens?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "The code differs, because the rules file becomes part of the agent's context",
+      "The code is the same, because agents ignore project files",
+      "The code is the same, because the agent remembers its first answer",
+      "The agent asks which version you prefer"
+    ],
+    "help_text": "",
+    "competency": "7: Representations",
+    "correct_answers": [
+      "The code differs, because the rules file becomes part of the agent's context"
+    ],
+    "explanation": "Instructions in project files are read into the context and shape every step that follows."
+  },
+  {
+    "id": "post_ag_quiz_q4",
+    "question": "The agent writes a test, runs it, sees it fail, fixes the code, and reruns it until it passes. What does this show?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "It understands your program the way an experienced developer does",
+      "It repeats a loop: predict an action, observe the result, predict the next action",
+      "It looked up the fix online",
+      "A person at the company fixed it remotely"
+    ],
+    "help_text": "",
+    "competency": "2: Understanding Intelligence",
+    "correct_answers": [
+      "It repeats a loop: predict an action, observe the result, predict the next action"
+    ],
+    "explanation": "Running tools and reading their output lets a prediction-based model correct itself. That is feedback, not human-like understanding."
+  },
+  {
+    "id": "post_ag_quiz_q5",
+    "question": "You ask the agent to “make checkout faster”. How does it choose which files to change?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "It finds the provably optimal change",
+      "It predicts a plausible plan from your request and the files it has read, which may not be the best plan",
+      "It changes every file in the project",
+      "It picks files at random"
+    ],
+    "help_text": "",
+    "competency": "8: Decision-Making",
+    "correct_answers": [
+      "It predicts a plausible plan from your request and the files it has read, which may not be the best plan"
+    ],
+    "explanation": "The plan is a prediction. A vague request gives the agent more room to choose a direction you didn't intend."
+  },
+  {
+    "id": "post_ag_quiz_q6",
+    "question": "How did the agent's model gain its coding knowledge?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Before release, by training on large amounts of code and text, including examples of using tools",
+      "By learning each time it runs your tests",
+      "Engineers wrote rules for every programming task",
+      "By saving the projects of users whose code was correct"
+    ],
+    "help_text": "",
+    "competency": "9: ML Steps",
+    "correct_answers": [
+      "Before release, by training on large amounts of code and text, including examples of using tools"
+    ],
+    "explanation": "Training happens ahead of time. During your task the model's weights do not change."
+  },
+  {
+    "id": "post_ag_quiz_q7",
+    "question": "A library was released yesterday. Can the agent use it correctly?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Yes, it already knows every library",
+      "Only if it reads the documentation, through a web search tool or files you give it; otherwise it may guess",
+      "Yes, it retrains overnight",
+      "No, an agent can never use new information"
+    ],
+    "help_text": "",
+    "competency": "11: Data Literacy",
+    "correct_answers": [
+      "Only if it reads the documentation, through a web search tool or files you give it; otherwise it may guess"
+    ],
+    "explanation": "The model's own knowledge stops at its training cutoff. Tools can bring newer information into its context."
+  },
+  {
+    "id": "post_ag_quiz_q8",
+    "question": "Yesterday you corrected the agent: “use pytest, not unittest.” Today you start a new session. Will it remember?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "Yes, the model retrained on your correction",
+      "Only if the correction was saved to a memory or rules file, or you resume the same conversation",
+      "Yes, it always remembers everything you say",
+      "No, there is no way to carry it over"
+    ],
+    "help_text": "",
+    "competency": "12: Learning from Data",
+    "correct_answers": [
+      "Only if the correction was saved to a memory or rules file, or you resume the same conversation"
+    ],
+    "explanation": "Memory comes from text that gets reloaded into context, not from the model learning."
+  },
+  {
+    "id": "post_ag_quiz_q9",
+    "question": "The agent confidently uses an API option that doesn't exist. Why?",
+    "type": "multiple_choice",
+    "required": true,
+    "options": [
+      "It copied the option from a website it just visited",
+      "It produced a plausible-looking pattern from its training data without checking the real documentation",
+      "It was optimizing for the shortest code",
+      "It reused another user's stored code"
+    ],
+    "help_text": "",
+    "competency": "13: Critically Interpreting Data",
+    "correct_answers": [
+      "It produced a plausible-looking pattern from its training data without checking the real documentation"
+    ],
+    "explanation": "Confident output is not the same as verified output. The agent can invent details that look right."
+  },
+  {
+    "id": "post_ag_quiz_q10",
+    "question": "The agent says, “All tests pass.” Which statements are true?",
+    "type": "checkboxes",
+    "required": true,
+    "options": [
+      "The code is now guaranteed to be correct",
+      "Tests check only what they test, so untested behavior could still be wrong",
+      "The agent may have changed the tests themselves to make them pass",
+      "Agents cannot run tests"
+    ],
+    "help_text": "Select all that apply.",
+    "competency": "5: AI's Strengths & Weaknesses",
+    "correct_answers": [
+      "Tests check only what they test, so untested behavior could still be wrong",
+      "The agent may have changed the tests themselves to make them pass"
+    ],
+    "explanation": "Passing tests is evidence, not proof. Always check what was tested and whether the tests were changed."
+  },
+  {
+    "id": "post_ag_quiz_q11",
+    "question": "The agent asks permission to delete the build/ folder and edit six files. What should you do?",
+    "type": "checkboxes",
+    "required": true,
+    "options": [
+      "Read the command and the changes before approving",
+      "Approve everything, because the AI knows best",
+      "Run the tests yourself and check that the result matches your goal",
+      "Rewrite your request more clearly if the plan doesn't match your intent"
+    ],
+    "help_text": "Select all that apply.",
+    "competency": "10: Human Role in AI",
+    "correct_answers": [
+      "Read the command and the changes before approving",
+      "Run the tests yourself and check that the result matches your goal",
+      "Rewrite your request more clearly if the plan doesn't match your intent"
+    ],
+    "explanation": "The agent acts, but you are accountable for what it changes. Permission prompts exist so you can check its work."
+  }
+]

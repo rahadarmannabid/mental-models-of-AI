@@ -7,11 +7,16 @@ docker-compose.yml). The main app reaches it with RUNNER_URL + RUNNER_TOKEN.
 
 Protocol (WebSocket /run):
     client → {"type": "start", "key", "language", "files", "entry"}
+             or {"type": "start", "key", "action": "pip", "args": ["install", "requests"], "files"}
     client → {"type": "stdin", "data": "line\\n"} | {"type": "eof"} | {"type": "stop"}
     runner → {"type": "status", "phase"} | {"type": "output", "stream", "data"}
+             | {"type": "display", "mime", "name", "data" (base64)}
              | {"type": "exit", ...result} | {"type": "rejected", "message"}
+
+POST /packages/clear {"key"} deletes a session's installed packages (the app calls it on submit).
 """
 
+import asyncio
 import hmac
 import logging
 import os
@@ -55,6 +60,17 @@ async def execute(req: BatchRequest, x_runner_token: Optional[str] = Header(defa
     if not _authorized(x_runner_token):
         raise HTTPException(status_code=403)
     return await sandbox.run_batch(key=req.key, language=req.language, files=req.files, entry=req.entry, stdin=req.stdin)
+
+
+class ClearPackagesRequest(BaseModel):
+    key: str
+
+
+@app.post("/packages/clear")
+async def clear_packages(req: ClearPackagesRequest, x_runner_token: Optional[str] = Header(default=None)):
+    if not _authorized(x_runner_token):
+        raise HTTPException(status_code=403)
+    return {"removed": await asyncio.to_thread(sandbox.clear_packages, req.key)}
 
 
 @app.websocket("/run")

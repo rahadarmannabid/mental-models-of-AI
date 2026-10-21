@@ -3,6 +3,7 @@
 Mounted as a sub-router in main.py at prefix /instructor.
 """
 
+import asyncio
 import os
 import shutil
 import copy
@@ -22,13 +23,19 @@ import uuid
 from urllib.parse import quote
 from pathlib import Path
 
-from firebase_utils import fb_dict
+from firebase_utils import fb_dict, invalidate_quiz_cache
 from quiz_analytics import (
     aggregate_quiz_analytics,
     build_user_ai_activity_log,
     collect_quiz_sessions_from_firebase,
-    delete_user_data_for_quiz,
+    delete_users_data_for_quiz,
     export_activity_log_csv,
+    activity_timeline_rows,
+    agent_interaction_rows,
+    autocomplete_suggestion_rows,
+    autocomplete_timeline_events,
+    export_agent_interactions_csv,
+    export_autocomplete_csv,
     export_per_session_csv,
     find_user_session_payload_for_quiz,
     validate_analytics_user_id,
@@ -79,6 +86,7 @@ def invalidate_quiz_analytics_cache(quiz_id: str) -> None:
         return
     with _analytics_aggregate_cache_lock:
         _analytics_aggregate_cache.pop(q, None)
+        _quiz_sessions_cache.pop(q, None)
 
 
 def _get_cached_analytics_aggregate(quiz_id: str, quiz_updated_at: Optional[str]) -> Optional[dict]:
@@ -110,8 +118,38 @@ def _set_cached_analytics_aggregate(
         }
 
 
-def _compute_analytics_aggregate(db, quiz_id: str, labels: List[str]) -> dict:
-    sessions = collect_quiz_sessions_from_firebase(db, quiz_id)
+# Raw session payloads per quiz, shared by the analytics page, exports and every per-student
+# activity log (each of those used to rescan all sessions in Firebase). Same TTL as aggregates.
+_QUIZ_SESSIONS_CACHE_MAX_QUIZZES = 4
+_quiz_sessions_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+_quiz_sessions_fetch_locks: Dict[str, threading.Lock] = {}
+
+
+def _get_quiz_sessions(db, quiz_id: str, *, bypass_cache: bool = False) -> List[Dict[str, Any]]:
+    """Blocking (call via asyncio.to_thread). One Firebase scan per quiz at a time per worker."""
+    def fresh() -> Optional[List[Dict[str, Any]]]:
+        ent = _quiz_sessions_cache.get(quiz_id)
+        return ent[1] if ent and time.monotonic() < ent[0] else None
+
+    with _analytics_aggregate_cache_lock:
+        fetch_lock = _quiz_sessions_fetch_locks.setdefault(quiz_id, threading.Lock())
+    sessions = None if bypass_cache else fresh()
+    if sessions is None:
+        with fetch_lock:
+            sessions = None if bypass_cache else fresh()
+            if sessions is None:
+                sessions = collect_quiz_sessions_from_firebase(db, quiz_id)
+                with _analytics_aggregate_cache_lock:
+                    _quiz_sessions_cache[quiz_id] = (time.monotonic() + _analytics_cache_ttl_seconds(), sessions)
+                    while len(_quiz_sessions_cache) > _QUIZ_SESSIONS_CACHE_MAX_QUIZZES:
+                        oldest = min(_quiz_sessions_cache, key=lambda k: _quiz_sessions_cache[k][0])
+                        _quiz_sessions_cache.pop(oldest, None)
+    # Analytics helpers may normalize payloads in place; keep the cached copy pristine.
+    return copy.deepcopy(sessions)
+
+
+def _compute_analytics_aggregate(db, quiz_id: str, labels: List[str], *, bypass_cache: bool = False) -> dict:
+    sessions = _get_quiz_sessions(db, quiz_id, bypass_cache=bypass_cache)
     return aggregate_quiz_analytics(sessions, quiz_id, labels)
 
 
@@ -150,7 +188,7 @@ def _load_analytics_payload_for_request(
             _attach_live_now_to_analytics(cached, quiz_id, labels)
             return cached, True
 
-    data = _compute_analytics_aggregate(db, quiz_id, labels)
+    data = _compute_analytics_aggregate(db, quiz_id, labels, bypass_cache=bypass_cache)
     _set_cached_analytics_aggregate(quiz_id, quiz_updated_at, data)
     _attach_live_now_to_analytics(data, quiz_id, labels)
     return data, False
@@ -161,6 +199,9 @@ _DEFAULT_SURVEY_TEMPLATE_FILES = {
     "pre": Path("surveys/instructor_default_pre_survey.json"),
     "post": Path("surveys/instructor_default_post_survey.json"),
     "recurrent": Path("surveys/instructor_default_recurrent_survey.json"),
+    "demographics": Path("surveys/instructor_demographics.json"),
+    "post_autocomplete": Path("surveys/instructor_post_autocomplete.json"),
+    "post_agent": Path("surveys/instructor_post_agent.json"),
 }
 
 # Per-quiz survey question images (uploaded by instructor); served via GET /quiz-images/{asset_id}/{filename}
@@ -474,24 +515,26 @@ async def dashboard(request: Request):
     if fb:
         from firebase_admin import db
         sanitized = sanitize_key(email)
-        quiz_ids = fb_dict(db.reference(f"instructors/{sanitized}/quizzes").get()) or {}
-        if quiz_ids:
-            all_quizzes = fb_dict(db.reference("quizzes").get()) or {}
-            for qid in quiz_ids:
-                qdata = all_quizzes.get(qid)
-                if qdata:
-                    qdata["id"] = qid
-                    quizzes.append(qdata)
+        quiz_ids = fb_dict(await asyncio.to_thread(
+            lambda: db.reference(f"instructors/{sanitized}/quizzes").get())) or {}
+        # Read only this instructor's quizzes (not the whole quizzes/ tree), in parallel.
+        fetched = await asyncio.gather(*(
+            asyncio.to_thread(lambda q=qid: db.reference(f"quizzes/{q}").get()) for qid in quiz_ids
+        ))
+        for qid, raw in zip(quiz_ids, fetched):
+            qdata = fb_dict(raw)
+            if qdata:
+                qdata["id"] = qid
+                quizzes.append(qdata)
         quizzes.sort(key=lambda q: q.get("created_at", ""), reverse=True)
 
         from main import get_active_quiz_session_counts
 
-        for q in quizzes:
-            qid = q.get("id")
-            if qid:
-                q["active_now"] = int(get_active_quiz_session_counts(qid).get("total_active") or 0)
-            else:
-                q["active_now"] = 0
+        counts = await asyncio.gather(*(
+            asyncio.to_thread(get_active_quiz_session_counts, q["id"]) for q in quizzes
+        ))
+        for q, live in zip(quizzes, counts):
+            q["active_now"] = int(live.get("total_active") or 0)
 
     return templates.TemplateResponse("instructor_dashboard.html", {
         "request": request,
@@ -779,6 +822,7 @@ async def update_quiz(request: Request, quiz_id: str, payload: dict = Body(...))
     updates["updated_at"] = datetime.utcnow().isoformat()
 
     db.reference(f"quizzes/{quiz_id}").update(updates)
+    invalidate_quiz_cache(quiz_id)
     invalidate_quiz_analytics_cache(quiz_id)
     return JSONResponse({"success": True, "quiz_id": quiz_id})
 
@@ -810,6 +854,7 @@ async def delete_quiz(request: Request, quiz_id: str):
     if qdir.exists() and qdir.is_dir():
         shutil.rmtree(qdir, ignore_errors=True)
 
+    invalidate_quiz_cache(quiz_id, access_code)
     invalidate_quiz_analytics_cache(quiz_id)
     return JSONResponse({"success": True})
 
@@ -833,6 +878,7 @@ async def toggle_publish(request: Request, quiz_id: str):
 
     new_status = not existing.get("published", False)
     db.reference(f"quizzes/{quiz_id}/published").set(new_status)
+    invalidate_quiz_cache(quiz_id)
     invalidate_quiz_analytics_cache(quiz_id)
     return JSONResponse({"success": True, "published": new_status})
 
@@ -944,7 +990,7 @@ async def quiz_activity_log_page(
     labels = _quiz_problem_labels(quiz)
     n_prob = max(1, len(labels))
 
-    sessions = collect_quiz_sessions_from_firebase(db, quiz_id)
+    sessions = await asyncio.to_thread(_get_quiz_sessions, db, quiz_id)
     payload = find_user_session_payload_for_quiz(sessions, quiz_id, uid, n_prob)
     if not payload:
         return templates.TemplateResponse(
@@ -975,6 +1021,27 @@ async def quiz_activity_log_page(
     log = build_user_ai_activity_log(payload, labels)
     rows = log.get("rows") or []
     problem_tables = log.get("problem_tables") or []
+
+    # Autocomplete (C2) and coding agent (C3) sessions have their own per-interaction views.
+    ai_view = "legacy"
+    agent_rows: List[Dict[str, Any]] = []
+    suggestion_rows: List[Dict[str, Any]] = []
+    try:
+        cond_int = int(session_condition) if session_condition is not None else None
+    except (TypeError, ValueError):
+        cond_int = None
+    if cond_int == 3:
+        ai_view, agent_rows = "agent", agent_interaction_rows(payload)
+    elif cond_int == 2:
+        ai_view, suggestion_rows = "autocomplete", autocomplete_suggestion_rows(payload)
+    if ai_view != "legacy":
+        empty_msg = ("No agent interactions recorded for this session yet." if ai_view == "agent"
+                     else "No autocomplete suggestions recorded for this session yet.")
+        error = None if (agent_rows or suggestion_rows) else empty_msg
+    else:
+        error = None if rows else (
+            "No AI suggestion rows in Firebase logs for this session (older submissions may lack `logs.ai_guesses`).")
+
     return templates.TemplateResponse(
         "instructor_activity_log.html",
         {
@@ -989,9 +1056,13 @@ async def quiz_activity_log_page(
             "log_rows": rows,
             "problem_tables": problem_tables,
             "session_id": log.get("session_id"),
-            "error": None
-            if rows
-            else "No AI suggestion rows in Firebase logs for this session (older submissions may lack `logs.ai_guesses`).",
+            "error": error,
+            "ai_view": ai_view,
+            "agent_rows": agent_rows,
+            "suggestion_rows": suggestion_rows,
+            "autocomplete_events": autocomplete_timeline_events(payload) if ai_view == "autocomplete" else [],
+            "problem_labels": labels,
+            "activity_rows": activity_timeline_rows(payload),
             "firebase_available": True,
         },
     )
@@ -1030,7 +1101,7 @@ async def quiz_activity_log_data(
         labels = _quiz_problem_labels(quiz)
         n_prob = max(1, len(labels))
 
-        sessions = collect_quiz_sessions_from_firebase(db, quiz_id)
+        sessions = await asyncio.to_thread(_get_quiz_sessions, db, quiz_id)
         payload = find_user_session_payload_for_quiz(sessions, quiz_id, uid, n_prob)
         if not payload:
             return JSONResponse({"error": "No session for this user"}, status_code=404)
@@ -1079,7 +1150,7 @@ async def quiz_activity_log_export(
         labels = _quiz_problem_labels(quiz)
         n_prob = max(1, len(labels))
 
-        sessions = collect_quiz_sessions_from_firebase(db, quiz_id)
+        sessions = await asyncio.to_thread(_get_quiz_sessions, db, quiz_id)
         payload = find_user_session_payload_for_quiz(sessions, quiz_id, uid, n_prob)
         if not payload:
             return JSONResponse({"error": "No session for this user"}, status_code=404)
@@ -1141,8 +1212,8 @@ async def quiz_analytics_data(
         quiz = _normalize_quiz_data(quiz)
         labels = _quiz_problem_labels(quiz)
         bypass = bool(refresh) or bool(request.query_params.get("nocache"))
-        data, cache_hit = _load_analytics_payload_for_request(
-            db, quiz_id, quiz, labels, bypass_cache=bypass
+        data, cache_hit = await asyncio.to_thread(
+            _load_analytics_payload_for_request, db, quiz_id, quiz, labels, bypass_cache=bypass
         )
         h = dict(_ANALYTICS_JSON_NO_CACHE)
         h["X-Analytics-Aggregate-Cache"] = "hit" if cache_hit else "miss"
@@ -1152,11 +1223,38 @@ async def quiz_analytics_data(
         return JSONResponse({"error": f"Server error: {e!s}"}, status_code=500)
 
 
+@router.get("/quiz/{quiz_id}/diagram")
+async def quiz_diagram_image(request: Request, quiz_id: str, session_id: str, diagram_id: str):
+    """Image of a student's diagram answer (drawing snapshot or uploaded photo) for the analytics page."""
+    email = _require_instructor(request)
+    if not email:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,120}", diagram_id) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", session_id):
+        return JSONResponse({"error": "Invalid id"}, status_code=400)
+
+    from firebase_admin import db
+    from main import load_diagram_image
+
+    quiz = fb_dict(await asyncio.to_thread(lambda: db.reference(f"quizzes/{quiz_id}").get())) if _get_firebase() else None
+    if not quiz:
+        return JSONResponse({"error": "Quiz not found"}, status_code=404)
+    if quiz.get("created_by") != email:
+        return JSONResponse({"error": "Not authorised"}, status_code=403)
+
+    meta, data, media = await asyncio.to_thread(load_diagram_image, session_id, diagram_id)
+    if data is None:
+        return JSONResponse({"error": "Image not found"}, status_code=404)
+    if not meta or str(meta.get("quiz_id") or "") != quiz_id:
+        return JSONResponse({"error": "Not authorised"}, status_code=403)
+    return Response(content=data, media_type=media, headers={"Cache-Control": "private, max-age=300"})
+
+
 @router.post("/quiz/{quiz_id}/analytics-delete-user")
 async def quiz_analytics_delete_user(
     request: Request, quiz_id: str, body: Optional[dict] = Body(default=None)
 ):
-    """Remove stored Firebase session data for one user on this quiz (and clear matching in-memory sessions)."""
+    """Remove stored Firebase session data for one user (``user_id``) or several (``user_ids``) on this quiz,
+    and clear their matching active sessions."""
     email = _require_instructor(request)
     if not email:
         return JSONResponse({"success": False, "error": "Not authenticated"}, status_code=401)
@@ -1167,9 +1265,13 @@ async def quiz_analytics_delete_user(
 
     from firebase_admin import db
 
-    user_id = (body or {}).get("user_id")
-    if not user_id or not isinstance(user_id, str):
-        return JSONResponse({"success": False, "error": "user_id required"}, status_code=400)
+    raw = (body or {}).get("user_ids")
+    if raw is None and (body or {}).get("user_id"):
+        raw = [(body or {}).get("user_id")]
+    if not isinstance(raw, list) or not raw or not all(isinstance(u, str) and u for u in raw):
+        return JSONResponse({"success": False, "error": "user_id or user_ids required"}, status_code=400)
+    if len(raw) > 500:
+        return JSONResponse({"success": False, "error": "At most 500 users per request"}, status_code=400)
 
     try:
         quiz = fb_dict(db.reference(f"quizzes/{quiz_id}").get())
@@ -1178,10 +1280,11 @@ async def quiz_analytics_delete_user(
         if quiz.get("created_by") != email:
             return JSONResponse({"success": False, "error": "Not authorised"}, status_code=403)
 
-        result = delete_user_data_for_quiz(db, quiz_id, user_id)
-        from main import forget_active_sessions_for_quiz_user
+        result = await asyncio.to_thread(delete_users_data_for_quiz, db, quiz_id, raw)
+        from main import forget_active_sessions_for_quiz_users
 
-        result["cleared_active_sessions"] = forget_active_sessions_for_quiz_user(quiz_id, user_id)
+        result["cleared_active_sessions"] = await asyncio.to_thread(forget_active_sessions_for_quiz_users, quiz_id, raw)
+        result["users_deleted"] = len(set(raw))
         invalidate_quiz_analytics_cache(quiz_id)
         return JSONResponse(content={"success": True, **result}, headers=_ANALYTICS_JSON_NO_CACHE)
     except ValueError as ve:
@@ -1223,8 +1326,8 @@ async def quiz_analytics_export(
         quiz = _normalize_quiz_data(quiz)
         labels = _quiz_problem_labels(quiz)
         bypass = bool(refresh) or bool(request.query_params.get("nocache"))
-        data, _cache_hit = _load_analytics_payload_for_request(
-            db, quiz_id, quiz, labels, bypass_cache=bypass
+        data, _cache_hit = await asyncio.to_thread(
+            _load_analytics_payload_for_request, db, quiz_id, quiz, labels, bypass_cache=bypass
         )
 
         slug = _safe_quiz_export_slug(quiz_id)
@@ -1249,4 +1352,53 @@ async def quiz_analytics_export(
         )
     except Exception as e:
         logger.exception("quiz_analytics_export failed")
+        return JSONResponse({"error": f"Server error: {e!s}"}, status_code=500)
+
+
+@router.get("/quiz/{quiz_id}/condition-export/{kind}")
+async def quiz_condition_export(
+    request: Request,
+    quiz_id: str,
+    kind: str,
+    refresh: int = Query(0, description="Set to 1 to bypass server session cache"),
+    user_id: Optional[str] = Query(None, description="Only this student"),
+):
+    """CSV of every agent interaction (kind=agent) or every autocomplete suggestion (kind=autocomplete)."""
+    email = _require_instructor(request)
+    if not email:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    exporters = {"agent": export_agent_interactions_csv, "autocomplete": export_autocomplete_csv}
+    if kind not in exporters:
+        return JSONResponse({"error": "kind must be agent or autocomplete"}, status_code=400)
+
+    fb = _get_firebase()
+    if not fb:
+        return JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+    from firebase_admin import db
+
+    try:
+        quiz = fb_dict(await asyncio.to_thread(lambda: db.reference(f"quizzes/{quiz_id}").get()))
+        if not quiz:
+            return JSONResponse({"error": "Quiz not found"}, status_code=404)
+        if quiz.get("created_by") != email:
+            return JSONResponse({"error": "Not authorised"}, status_code=403)
+
+        labels = _quiz_problem_labels(_normalize_quiz_data(quiz))
+        sessions = await asyncio.to_thread(_get_quiz_sessions, db, quiz_id, bypass_cache=bool(refresh))
+        uid = validate_analytics_user_id(user_id) if user_id else None
+        csv_text = await asyncio.to_thread(exporters[kind], sessions, quiz_id, labels, uid)
+
+        h = dict(_ANALYTICS_JSON_NO_CACHE)
+        name = "agent-interactions" if kind == "agent" else "autocomplete-suggestions"
+        if uid:
+            name += "-" + (re.sub(r"[^a-zA-Z0-9._-]", "_", uid)[:80] or "user")
+        h["Content-Disposition"] = f'attachment; filename="{_safe_quiz_export_slug(quiz_id)}-{name}.csv"'
+        return Response(
+            content=("\ufeff" + csv_text).encode("utf-8"),
+            media_type="text/csv; charset=utf-8",
+            headers=h,
+        )
+    except Exception as e:
+        logger.exception("quiz_condition_export failed")
         return JSONResponse({"error": f"Server error: {e!s}"}, status_code=500)

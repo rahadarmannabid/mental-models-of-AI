@@ -701,9 +701,6 @@
             
             <div class="login-header">
                 <div class="login-title">AI Code Assistant</div>
-                <div class="login-subtitle">
-                     Coding environment with real-time AI assistance
-                </div>
             </div>
 
             <form class="login-form" id="loginForm">
@@ -743,9 +740,6 @@
         autocomplete="off"
         {% if quiz_mode is defined and quiz_mode %}value="{{ access_code }}" readonly{% endif %}
     >
-    <small class="info-text">
-        Only valid assignment keys are accepted. Invalid keys will be rejected for security.
-    </small>
 </div>
 
 <div class="form-group">
@@ -772,9 +766,6 @@
             <option value="java">Java</option>
         {% endif %}
     </select>
-    <small class="info-text">
-        Choose the programming language you'll be working with in the IDE.
-    </small>
 </div>
                 
                 <button type="submit" class="login-button" id="loginButton">
@@ -789,13 +780,7 @@
             
 
             <div class="info-section">
-                <div class="info-text">
-                    This is a secure research environment. All sessions are logged and monitored for research purposes.
-                </div>
-                <div class="security-badge">
-                    Research database integration active
-                </div>
-                <div style="text-align:center;margin-top:12px;">
+                <div style="text-align:center;">
                     <a href="/instructor/login" style="color:#58a6ff;font-size:13px;text-decoration:none;">Instructor Login</a>
                 </div>
             </div>
@@ -901,23 +886,15 @@
             errorText.textContent = message;
             errorMessage.classList.remove('hidden');
             
-            // Visual styling based on type
-            if (type === 'warning') {
-                errorMessage.style.borderColor = '#f59e0b';
-                errorMessage.style.background = 'linear-gradient(135deg, #3d2e1b, #4d3722)';
-                errorMessage.querySelector('span:first-child').textContent = '⚠️';
-            } else {
-                errorMessage.style.borderColor = '#ef4444';
-                errorMessage.style.background = 'linear-gradient(135deg, #2d1b1b, #3d2222)';
-                errorMessage.querySelector('span:first-child').textContent = '⚠️';
-            }
+            // Red = failed, amber = check something first, green = done
+            ['success', 'warning', 'info'].forEach((t) => errorMessage.classList.toggle('is-' + t, t === type));
+            errorMessage.querySelector('span:first-child').textContent =
+                type === 'success' ? '✅' : type === 'info' ? 'ℹ️' : type === 'warning' ? '⚠️' : '❌';
         }
 
         function hideError() {
             errorMessage.classList.add('hidden');
-            // Reset to default error styling
-            errorMessage.style.borderColor = '#ef4444';
-            errorMessage.style.background = 'linear-gradient(135deg, #2d1b1b, #3d2222)';
+            errorMessage.classList.remove('is-success', 'is-warning', 'is-info');
         }
 
         // Generate session token for URL
@@ -954,7 +931,7 @@
             e.preventDefault();
             
             if (!consentGiven) {
-                showError('Please complete the consent form first');
+                showError('Please complete the consent form first', 'warning');
                 return;
             }
             
@@ -964,17 +941,17 @@
 
             // Basic validation
             if (!userId || !assignmentKey || !selectedLanguage) {
-                showError('Please fill in User ID, Assignment Key, and select a Programming Language');
+                showError('Please fill in User ID, Assignment Key, and select a Programming Language', 'warning');
                 return;
             }
 
             if (userId.length < 3) {
-                showError('User ID must be at least 3 characters long');
+                showError('User ID must be at least 3 characters long', 'warning');
                 return;
             }
 
             if (assignmentKey.length < 4) {
-                showError('Assignment Key must be at least 4 characters long');
+                showError('Assignment Key must be at least 4 characters long', 'warning');
                 return;
             }
             

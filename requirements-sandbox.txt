@@ -1,0 +1,5 @@
+# Preinstalled for student programs (code runs with the same Python as the app/runner).
+# Students can add more with `pip install` in the terminal; those go to a per-session folder.
+numpy>=1.26,<3
+pandas>=2.2,<3
+matplotlib>=3.8,<4

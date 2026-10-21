@@ -22,9 +22,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN useradd -m -u 1000 appuser && \
     useradd -r -u 10001 -M -s /usr/sbin/nologin sandbox   # runs student programs (runner.py)
 
-COPY requirements.txt .
+COPY requirements.txt requirements-sandbox.txt ./
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt -r requirements-sandbox.txt
+
+# Matplotlib font cache built once here, copied into each run (sandbox.py: SANDBOX_MPL_CACHE)
+ENV SANDBOX_MPL_CACHE=/opt/mplcache
+RUN MPLCONFIGDIR=/opt/mplcache MPLBACKEND=Agg python -c "import matplotlib.pyplot" && chmod -R a+rX /opt/mplcache
 
 # App source (.dockerignore excludes .env, submissions, logs, etc.)
 COPY --chown=appuser:appuser . .
@@ -32,6 +36,7 @@ COPY --chown=appuser:appuser . .
 # Verify layout (no .env required — configure via container env at run time)
 RUN echo "=== VERIFYING CRITICAL FILES ===" && \
     test -f /app/main.py && test -f /app/admin.py && test -f /app/runner.py && test -f /app/sandbox.py && \
+    test -f /app/sandbox_shims/turtle.py && test -f /app/sandbox_shims/_sandbox_mpl.py && \
     test -f /app/run_production.sh && \
     test -d /app/templates && \
     test -f /app/templates/home.html && \
