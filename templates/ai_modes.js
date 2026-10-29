@@ -24,6 +24,12 @@
         var cache = new Map();
         var pending = {};  // suggestion_id -> time shown (ms), until accepted / rejected / ignored
         var live = {};     // suggestion_id -> completion lists still holding it (cached hits are re-offered)
+        var inFlight = 0;  // /complete requests running: the "Suggesting…" spinner shows while > 0
+        function suggestLoading(delta) {
+            inFlight = Math.max(0, inFlight + delta);
+            var el = document.getElementById('suggestIndicator');
+            if (el) el.hidden = inFlight === 0;
+        }
         function resolve(id, decision, reason) {
             var t = pending[id];
             if (t === undefined) return;
@@ -52,7 +58,10 @@
                 var suffix = model.getValueInRange(new monaco.Range(position.lineNumber, position.column, last, model.getLineMaxColumn(last)));
                 if (!prefix.trim()) return { items: [] };
 
-                var key = prefix.slice(-3000) + '\u0000' + suffix.slice(0, 500);
+                // Other files open in editor tabs are sent as extra context (not closed files)
+                var openFiles = openTabFiles();
+                var key = prefix.slice(-3000) + '\u0000' + suffix.slice(0, 500) + '\u0000' +
+                    openFiles.map(function (f) { return f.filename + '\u0001' + f.content; }).join('\u0002');
                 var hit = cache.get(key);
                 if (!hit) {
                     if (context.triggerKind === monaco.languages.InlineCompletionTriggerKind.Automatic) {
@@ -62,6 +71,7 @@
                     var ctrl = new AbortController();
                     token.onCancellationRequested(function () { ctrl.abort(); });
                     var started = Date.now();
+                    suggestLoading(1);
                     try {
                         var res = await fetch('/complete', {
                             method: 'POST',
@@ -72,7 +82,8 @@
                                 language: lang(),
                                 filename: activeFileName(),
                                 prefix: prefix,
-                                suffix: suffix
+                                suffix: suffix,
+                                open_files: openFiles
                             })
                         });
                         if (!res.ok) return { items: [] };
@@ -80,6 +91,8 @@
                         hit = { id: data.id || '', text: data.completion || '', latency_ms: Date.now() - started };
                     } catch (e) {
                         return { items: [] };
+                    } finally {
+                        suggestLoading(-1);
                     }
                     cache.set(key, hit);
                     if (cache.size > 200) cache.delete(cache.keys().next().value);
@@ -93,7 +106,8 @@
                     column: position.column,
                     lines: hit.text.split('\n').length,
                     text: hit.text.slice(0, 2000),
-                    latency_ms: hit.latency_ms
+                    latency_ms: hit.latency_ms,
+                    context_files: openFiles.map(function (f) { return f.filename; })
                 };
                 // Code in the IDE when the suggestion appeared (logged once, with the "shown" event)
                 var snapshot = (prefix + suffix).slice(0, 10000);
@@ -132,6 +146,14 @@
     }
 
     function activeFileName() { return window.WS ? WS.activeName() : 'main'; }
+    // Files open in editor tabs, other than the active one, in tab order
+    function openTabFiles() {
+        if (!window.WS) return [];
+        var active = WS.activeName();
+        return (WS.tabs || []).filter(function (n) { return n !== active; }).map(function (n) {
+            return { filename: n, content: WS.get(n) || '' };
+        }).filter(function (f) { return f.content.trim(); });
+    }
 
     // ── Condition 3: Cursor-style agent ───────────────────────────────────────
     var SVG = {
@@ -148,6 +170,7 @@
         file: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M10 1H3.5L3 1.5v13l.5.5h9l.5-.5V4l-3-3zm0 1.4L11.6 4H10V2.4zM12 14H4V2h5v3h3v9z"/></svg>',
         read: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M8 3.5c3 0 5.3 2.1 6 4.5-.7 2.4-3 4.5-6 4.5S2.7 10.4 2 8c.7-2.4 3-4.5 6-4.5zm0 1.2c-2.3 0-4.1 1.5-4.8 3.3.7 1.8 2.5 3.3 4.8 3.3s4.1-1.5 4.8-3.3C12.1 6.2 10.3 4.7 8 4.7zm0 1.3a2 2 0 110 4 2 2 0 010-4z"/></svg>',
         run: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M2 3h12v10H2V3zm1 1v8h10V4H3zm1.3 1.7l2.5 2.3-2.5 2.3-.7-.7L5.4 8 3.6 6.4l.7-.7zM7.5 10h4v1h-4v-1z"/></svg>',
+        pkg: '<svg viewBox="0 0 16 16"><path fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" d="M8 1.8l5.6 3v6.4L8 14.2 2.4 11.2V4.8zM2.4 4.8L8 7.8l5.6-3M8 7.8v6.4"/></svg>',
         skill: '<svg viewBox="0 0 16 16"><path fill="currentColor" d="M9.3 1.5L4 9h3.5l-1 5.5L12 7H8.5z"/></svg>'
     };
 
@@ -223,6 +246,12 @@
         els: {},
 
         storageKey: function () { return 'agentChats_' + currentSession.sessionId; },
+        // "Always allow" for package installs, remembered for this participant's session only
+        autoInstallKey: function () { return 'agentAutoInstall_' + currentSession.sessionId; },
+        autoInstall: function () { try { return localStorage.getItem(this.autoInstallKey()) === '1'; } catch (e) { return false; } },
+        setAutoInstall: function (on) {
+            try { if (on) localStorage.setItem(this.autoInstallKey(), '1'); else localStorage.removeItem(this.autoInstallKey()); } catch (e) { /* ignore */ }
+        },
         chat: function () { var id = this.chatId; return this.chats.find(function (c) { return c.id === id; }); },
 
         init: function (monaco, editor) {
@@ -674,6 +703,49 @@
             return row;
         },
         scroll: function () { var m = this.els.messages; m.scrollTop = m.scrollHeight; },
+
+        // The agent wants to pip install: ask like Cursor (Always allow / Allow once / Deny)
+        addApproval: function (turn, ev, turnId) {
+            var self = this, shownAt = Date.now();
+            var box = document.createElement('div');
+            box.className = 'agent-approval';
+            box.innerHTML =
+                '<div class="agent-approval__head"><span class="agent-step__icon">' + SVG.pkg + '</span>Install packages?</div>' +
+                '<pre class="agent-code">pip install ' + esc(ev.packages.join(' ')) + '</pre>' +
+                '<div class="agent-approval__note">Installed only for you, and removed when you submit.</div>' +
+                '<div class="agent-approval__actions">' +
+                '<button type="button" class="agent-btn" data-d="deny">Deny</button>' +
+                '<button type="button" class="agent-btn" data-d="always">Always allow</button>' +
+                '<button type="button" class="agent-btn agent-btn--primary" data-d="once">Allow once</button></div>';
+            turn.appendChild(box);
+            this.scroll();
+            var LABELS = { always: 'Always allowed', once: 'Allowed once', deny: 'Denied' };
+            var card = {
+                id: ev.id,
+                done: false,
+                settle: function (decision) {
+                    if (card.done) return;
+                    card.done = true;
+                    var acts = box.querySelector('.agent-approval__actions');
+                    acts.innerHTML = '<span class="agent-approval__result' + (decision === 'deny' || !decision ? '' : ' agent-ok') + '">' +
+                        (LABELS[decision] || 'No answer') + '</span>';
+                }
+            };
+            box.querySelectorAll('[data-d]').forEach(function (b) {
+                b.onclick = function () {
+                    var d = b.dataset.d;
+                    box.querySelectorAll('[data-d]').forEach(function (x) { x.disabled = true; });
+                    if (d === 'always') self.setAutoInstall(true);
+                    log('agent_install_decision', { turn_id: turnId, approval_id: ev.id, packages: ev.packages, decision: d, wait_ms: Date.now() - shownAt });
+                    fetch('/agent/approve', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ session_id: currentSession.sessionId, approval_id: ev.id, decision: d })
+                    }).then(function (r) { if (r.ok) card.settle(d); else throw new Error('HTTP ' + r.status); })
+                      .catch(function () { box.querySelectorAll('[data-d]').forEach(function (x) { x.disabled = false; }); });
+                };
+            });
+            return card;
+        },
         stop: function () { if (this.abort) this.abort.abort(); log('agent_stopped', { mode: this.mode }); },
         setBusy: function (busy) {
             this.busy = busy;
@@ -709,13 +781,15 @@
                 active_file: WS.activeName(),
                 history: chat.history.slice(-20),
                 skills: skills,
-                terminal_output: term ? term.innerText.slice(-3000) : ''
+                terminal_output: term ? term.innerText.slice(-3000) : '',
+                auto_install: this.autoInstall()
             };
             log('agent_message_sent', { mode: mode, length: text.length, skills: skills.map(function (s) { return s.name; }), mentions: mentions, attached_skills: attached });
 
             var turn = this.newTurn();
             var textEl = null, blockText = '', answer = '', turnId = '', failed = false;
             var thinking = this.addStep(turn, '<span class="agent-spinner"></span>', '<span class="agent-shimmer">Thinking</span>', 'agent-step--thinking');
+            var approvals = [];  // approval cards still waiting for an answer
             this.setBusy(true);
             this.abort = new AbortController();
 
@@ -738,6 +812,31 @@
                     textEl = null;
                     if (ev.name === 'list_files') self.addStep(turn, SVG.file, 'Listed files');
                     else if (ev.name === 'read_file') self.addStep(turn, SVG.read, 'Read <span class="agent-file">' + esc(ev.filename) + '</span>');
+                } else if (ev.type === 'approval') {
+                    textEl = null;
+                    approvals.push(self.addApproval(turn, ev, turnId));
+                } else if (ev.type === 'approval_result') {
+                    textEl = null;
+                    var card = approvals.find(function (a) { return a.id === ev.id; });
+                    if (card) card.settle(ev.decision);
+                    if (ev.decision === 'always') self.setAutoInstall(true);
+                    if (ev.auto) {
+                        var auto = self.addStep(turn, SVG.pkg, 'Auto-approved install of <span class="agent-file">' + esc(ev.packages.join(', ')) +
+                            '</span> <button type="button" class="agent-link">Ask me again</button>');
+                        auto.querySelector('button').onclick = function () {
+                            self.setAutoInstall(false);
+                            log('agent_install_always_off', {});
+                            this.replaceWith('· will ask next time');
+                        };
+                    } else if (ev.decision === 'timeout') {
+                        self.addStep(turn, SVG.pkg, 'Install request expired without an answer', 'agent-step--muted');
+                    }
+                } else if (ev.type === 'install') {
+                    var pout = (ev.output || '').trim();
+                    var ir = self.addStep(turn, SVG.pkg,
+                        '<details><summary>Installed <span class="agent-file">' + esc(ev.packages.join(', ')) + '</span> <span class="' + (ev.success ? 'agent-ok' : 'agent-err') + '">' +
+                        (ev.success ? 'succeeded' : 'failed') + '</span></summary><pre class="agent-code">' + esc(pout || '(no output)') + '</pre></details>');
+                    ir.classList.add('agent-step--run');
                 } else if (ev.type === 'file') {
                     self.applyFileEvent(ev, turnId);
                     var verb = ev.action === 'delete' ? 'Deleted' : ev.action === 'create' ? 'Created' : 'Edited';
@@ -782,6 +881,7 @@
                 else { failed = true; self.addStep(turn, '!', 'Could not reach the agent. Please try again.', 'agent-step--err'); }
             }
             if (thinking) thinking.remove();
+            approvals.forEach(function (a) { a.settle(null); });  // stopped while waiting: no answer can be sent now
             this.setBusy(false);
             this.abort = null;
 
@@ -868,11 +968,23 @@
                 else WS.set(name, p.baseline, { source: 'agent_undo' });
             }
             var doneAt = this.respondedAt[p.turn_id];
-            log('agent_edit_decision', { filename: name, decision: decision, turn_id: p.turn_id,
-                time_to_decision_ms: doneAt ? Math.max(0, Date.now() - doneAt) : null });
+            var waited = doneAt ? Math.max(0, Date.now() - doneAt) : null;
+            log('agent_edit_decision', { filename: name, decision: decision, turn_id: p.turn_id, time_to_decision_ms: waited });
+            // Also stored on the agent turn itself (the resulting code shows up in the next turn's patch)
+            this.saveDecision({ session_id: currentSession.sessionId, turn_id: p.turn_id, filename: name, decision: decision,
+                time_to_decision_ms: waited }, 2);
             this.syncBadges();
             this.renderReview();
             this.refreshDecorations();
+        },
+        saveDecision: function (body, tries) {
+            if (!body.turn_id) return;
+            var self = this;
+            fetch('/agent/decision', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+                .then(function (r) { return r.ok ? r.json() : { found: false }; })
+                // The turn is stored when its stream ends, so a very quick Keep/Undo may arrive first
+                .then(function (d) { if (!d.found && tries > 1) setTimeout(function () { self.saveDecision(body, tries - 1); }, 2000); })
+                .catch(function () { if (tries > 1) setTimeout(function () { self.saveDecision(body, tries - 1); }, 2000); });
         },
         refreshDecorations: function () {
             if (!this.monaco) return;
@@ -969,6 +1081,13 @@
         '.agent-btn--primary{background:var(--ui-accent);border-color:transparent;color:#fff;}',
         '.agent-btn--primary:hover{background:var(--ui-accent-hover);}',
         '.agent-build{align-self:flex-start;margin-top:4px;}',
+        '.agent-approval{border:1px solid var(--ui-border-strong);border-radius:var(--radius-lg);background:#1c1c1c;padding:8px 10px;font:var(--fs-sm)/1.5 var(--ui-font);color:var(--ui-text);}',
+        '.agent-approval__head{display:flex;align-items:center;gap:7px;font-weight:var(--fw-medium);color:var(--ui-text-strong);}',
+        '.agent-approval__note{color:var(--ui-text-muted);margin-bottom:6px;}',
+        '.agent-approval__actions{display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap;}',
+        '.agent-approval__actions .agent-btn{height:var(--h-btn-sm);padding:0 10px;}',
+        '.agent-approval__actions .agent-btn:disabled{opacity:.5;cursor:default;}',
+        '.agent-approval__result{color:var(--ui-text-muted);}',
         '.agent-link{background:none;border:0;color:var(--ui-text-muted);cursor:pointer;font:var(--fs-sm)/1 var(--ui-font);padding:4px 6px;border-radius:var(--radius-sm);transition:background-color var(--dur-fast),color var(--dur-fast);}',
         '.agent-link:hover{color:#e7e7e7;background:#2a2d2e;}',
         '.agent-link--keep{color:#cccccc;}',

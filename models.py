@@ -55,6 +55,8 @@ class ProblemCreate(BaseModel):
     recurrent_survey: List[SurveyQuestionCreate] = Field(default_factory=list)
     recurrent_survey_interval: int = 4
     recurrent_survey_start: int = 5
+    # Show recurrent questions in a collapsible side panel (opens when due, editor stays usable)
+    recurrent_survey_side_panel: bool = False
 
 
 # ─── Quiz Creation / Update ─────────────────────────────────────────────────

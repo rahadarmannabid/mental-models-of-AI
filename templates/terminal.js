@@ -202,7 +202,7 @@
         btn.title = isRunning ? 'Stop the program (Ctrl+C in the terminal)' : 'Run the current file';
     }
 
-    function runOnServer(language, entry, compileOnly, pipArgs) {
+    function runOnServer(language, entry, compileOnly, pipArgs, extraFiles) {
         return new Promise(function (resolve) {
             var result = { status: 'error', output: '', error: '', exit_code: null, reason: '', stdin_lines: 0, images: 0 };
             var proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -217,8 +217,8 @@
             term.focus();
 
             ws.onopen = function () {
-                var msg = { session_id: currentSession.sessionId, language: language, files: WS.list(),
-                            entry: entry, compile_only: !!compileOnly };
+                var msg = { session_id: currentSession.sessionId, language: language,
+                            files: WS.list().concat(extraFiles || []), entry: entry, compile_only: !!compileOnly };
                 if (pipArgs) { msg.action = 'pip'; msg.args = pipArgs; }
                 send(msg);
             };
@@ -342,7 +342,7 @@
             var parts = v.split(/\s+/);
             var last = parts[parts.length - 1];
             var names = WS.names();
-            if (parts.length === 1) names = ['python', 'python3', 'pip', 'gcc', 'g++', 'javac', 'java', 'node', 'ls', 'cat', 'clear', 'help', 'run', 'pwd', 'echo']
+            if (parts.length === 1) names = ['python', 'python3', 'pip', 'pytest', 'gcc', 'g++', 'javac', 'java', 'node', 'ls', 'cat', 'clear', 'help', 'run', 'pwd', 'echo']
                 .concat(Object.keys(this.built).map(function (n) { return './' + n; }));
             var hits = names.filter(function (n) { return n.indexOf(last) === 0; });
             if (hits.length === 1) {
@@ -388,6 +388,7 @@
             if (cmd === 'help') {
                 var lines = ['Available commands:'];
                 if (L === 'python') lines.push('  python <file.py>        run a Python file (type input when it asks)',
+                                               '  pytest [test_file.py]   run the tests (all test_*.py files if none given)',
                                                '  pip install <package>   install a package just for you (removed when you submit)',
                                                '  pip list                show installed packages (numpy, pandas, matplotlib are ready)',
                                                '  Charts (matplotlib, plt.show()) and turtle drawings appear here in the terminal.');
@@ -429,6 +430,16 @@
                     return false;
                 }
                 return this.pip(pipArgs, trigger);
+            }
+            var pytestArgs = cmd === 'pytest' || cmd === 'py.test' ? args
+                : ((cmd === 'python' || cmd === 'python3' || cmd === 'py') && args[0] === '-m' && args[1] === 'pytest' ? args.slice(2) : null);
+            if (pytestArgs) {
+                if (L !== 'python') return this.unavailable(cmd);
+                // pytest runs inside the normal sandbox through a small entry file that is not part of the workspace
+                var runner = 'import sys, pytest\nsys.exit(pytest.main(["-p", "no:cacheprovider", "--color=no"] + ' +
+                    JSON.stringify(pytestArgs.map(String)) + '))\n';
+                return this.program('python', '_pytest_runner.py', false, trigger || 'pytest',
+                    [{ filename: '_pytest_runner.py', content: runner }]);
             }
             if (cmd === 'python' || cmd === 'python3' || cmd === 'py') {
                 if (L !== 'python') return this.unavailable(cmd);
@@ -556,12 +567,12 @@
             return res.status === 'success';
         },
 
-        program: async function (language, entry, compileOnly, trigger) {
+        program: async function (language, entry, compileOnly, trigger, extraFiles) {
             var started = Date.now();
             currentSession.compilerClickCount = (currentSession.compilerClickCount || 0) + 1;
             var res;
             try {
-                res = language === 'javascript' ? await runJavaScript(WS.get(entry)) : await runOnServer(language, entry, compileOnly);
+                res = language === 'javascript' ? await runJavaScript(WS.get(entry)) : await runOnServer(language, entry, compileOnly, null, extraFiles);
             } catch (err) {
                 res = { status: 'error', output: '', error: String(err && err.message || err), exit_code: null, reason: '', stdin_lines: 0 };
                 term.write('Execution failed: ' + res.error + '\n', 'term-stderr');

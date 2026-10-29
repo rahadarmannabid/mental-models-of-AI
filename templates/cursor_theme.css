@@ -87,6 +87,13 @@ body { background: var(--ui-page); color: var(--ui-text); font: var(--fs-md)/var
 .autosave-indicator.saved .autosave-icon { color: var(--ui-green); animation: ui-pop-in var(--dur) var(--ease-out); }
 .autosave-indicator.error { color: var(--ui-error); }
 .autosave-indicator.pending { color: var(--ui-warning); }
+/* Code suggestion loading (left of the autosave chip) */
+.suggest-indicator {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px;
+    font: var(--fw-medium) var(--fs-sm)/1 var(--ui-font); color: var(--ui-text-muted); user-select: none;
+}
+.suggest-indicator[hidden] { display: none; }
+.suggest-indicator:not([hidden]) + .autosave-indicator { margin-left: 0; }
 .autosave-spinner {
     width: 11px; height: 11px; border-radius: 50%; border: 1.5px solid var(--ui-border-strong); border-top-color: var(--ui-text);
     animation: ui-spin 0.8s linear infinite;

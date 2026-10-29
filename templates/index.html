@@ -7,6 +7,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="/static/diagram-widget.js"></script>
+    <script src="/static/voice-input.js"></script>
     <script src="/static/ui-motion.js"></script>
     <style>
         * {
@@ -1720,6 +1721,46 @@
 .survey-pager-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .survey-pager-label { color: #888; font-size: 13px; min-width: 44px; text-align: center; }
 
+/* Recurrent survey as a collapsible side panel (instructor toggle): no backdrop, editor stays usable. */
+.survey-modal.survey-modal--panel {
+    left: auto; right: 0; width: min(400px, 100vw);
+    background: transparent !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+    align-items: stretch; justify-content: stretch; z-index: 9000;
+    animation: surveyPanelIn 0.2s ease-out !important;
+}
+.survey-modal.survey-modal--panel.survey-modal--diagram { width: min(760px, 100vw); }
+@keyframes surveyPanelIn { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.survey-modal--panel .survey-container {
+    width: 100%; max-width: none !important; height: 100%; max-height: none;
+    border-radius: 0 !important; border-width: 0 0 0 1px !important; animation: none !important;
+    padding: 16px !important; display: flex; flex-direction: column;
+}
+.survey-modal--panel .survey-header { position: relative; padding-right: 32px; }
+.survey-modal--panel .survey-header h2 { font-size: 16px !important; }
+.survey-modal--panel .survey-content { flex: 1; display: flex; flex-direction: column; }
+.survey-modal--panel .survey-content-container { display: block; flex: 1; }
+.survey-modal--panel .ai-history-panel { display: none; }
+.survey-modal--panel .survey-questions-panel { max-width: 100%; }
+.survey-panel-close {
+    display: none; position: absolute; top: 0; right: 0; width: 28px; height: 28px;
+    border: 0; border-radius: 6px; background: transparent; color: #aaa; font-size: 20px; line-height: 1; cursor: pointer;
+}
+.survey-panel-close:hover { background: #2a2d2e; color: #fff; }
+.survey-modal--panel .survey-panel-close { display: block; }
+.survey-modal--panel.survey-modal--final .survey-panel-close { display: none; }
+.survey-panel-tab {
+    position: fixed; right: 0; top: 40%; z-index: 8999; writing-mode: vertical-rl;
+    display: flex; align-items: center; gap: 8px; padding: 12px 6px;
+    background: #252526; color: #ccc; border: 1px solid #3c3c3c; border-right: 0; border-radius: 6px 0 0 6px;
+    font: 500 12px/1 var(--ui-font, sans-serif); cursor: pointer;
+}
+.survey-panel-tab:hover { background: #2d2d2d; color: #fff; }
+.survey-panel-tab.is-open { display: none; }
+.survey-panel-tab__dot { width: 7px; height: 7px; border-radius: 50%; background: transparent; }
+.survey-panel-tab.is-pending { color: #fff; border-color: var(--ui-accent, #0078d4); }
+.survey-panel-tab.is-pending .survey-panel-tab__dot { background: var(--ui-accent, #0078d4); }
+.survey-panel-tab.is-done { color: #89d185; }
+
 .ai-history-panel {
     flex: 0 0 35%;
     max-width: 35%;
@@ -2264,6 +2305,9 @@
             <div class="lc-card__header code-card__header">
                 <span class="lc-card__title"><svg viewBox="0 0 16 16" class="tab-icon" style="color:#2cbb5d"><path fill="currentColor" d="M5.3 4.2 1.5 8l3.8 3.8.9-.9L3.3 8l2.9-2.9zm5.4 0-.9.9L12.7 8l-2.9 2.9.9.9L14.5 8zM9.2 2.5 5.6 13.2l1.2.3L10.4 2.8z"/></svg>Code</span>
                 <span class="code-card__lang" id="codeLangLabel">—</span>
+                <span id="suggestIndicator" class="suggest-indicator" role="status" aria-live="polite" title="Generating a code suggestion" hidden>
+                    <span class="autosave-spinner"></span><span>Suggesting…</span>
+                </span>
                 <span id="autosaveIndicator" class="autosave-indicator saved" role="status" aria-live="polite" title="Your code is saved automatically as you type">
                     <span class="autosave-icon"></span><span class="autosave-text">Saved</span>
                 </span>
@@ -5313,8 +5357,8 @@ function incrementAnalysisCount() {
 
 // Check if periodic survey should be shown based on suggestion clicks (accept/reject)
 function checkSuggestionBasedPeriodicSurvey() {
-    if (!currentSession.periodicSurveyEnabled) {
-        return;
+    if (!currentSession.periodicSurveyEnabled || surveySidePanelOn()) {
+        return;  // side panel questions are answered once, whenever the student chooses
     }
 
     if (!currentSession.nextPeriodicSurveyAt) {
@@ -5334,11 +5378,81 @@ function checkSuggestionBasedPeriodicSurvey() {
     }
 }
 
-function showPeriodicSurvey() {
+// ── Task questions in a side panel (instructor toggle "Show in a side panel") ──
+// The survey modal becomes a drawer on the right that the student opens and closes (answers stay).
+// No survey pops up during the task: the questions are answered once per task, and they must be
+// answered before the code can be submitted (surveyData.sidePanelDone).
+function surveySidePanelOn() {
+    return surveyData.sidePanel === true && surveyData.questions.length > 0;
+}
+
+function setupSurveySidePanel() {
+    const modal = document.getElementById('surveyModal');
+    const on = surveySidePanelOn();
+    modal.classList.toggle('survey-modal--panel', on);
+    let tab = document.getElementById('surveyPanelTab');
+    if (!on) {
+        if (tab) tab.remove();
+        return;
+    }
+    if (!tab) {
+        tab = document.createElement('button');
+        tab.id = 'surveyPanelTab';
+        tab.type = 'button';
+        tab.className = 'survey-panel-tab';
+        tab.innerHTML = '<span class="survey-panel-tab__dot"></span><span class="survey-panel-tab__label">Questions</span>';
+        tab.onclick = openSurveyPanelFromTab;
+        document.body.appendChild(tab);
+    }
+    if (!modal.querySelector('.survey-panel-close')) {
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'survey-panel-close';
+        close.title = 'Close (your answers are kept)';
+        close.innerHTML = '&times;';
+        close.onclick = () => setSurveyPanelOpen(false);
+        modal.querySelector('.survey-header').appendChild(close);
+    }
+    updateSurveyPanelTab();
+}
+
+function updateSurveyPanelTab() {
+    const tab = document.getElementById('surveyPanelTab');
+    if (!tab) return;
+    const open = !document.getElementById('surveyModal').classList.contains('hidden');
+    const done = !!surveyData.sidePanelDone;
+    tab.classList.toggle('is-open', open);
+    tab.classList.toggle('is-pending', !done);
+    tab.classList.toggle('is-done', done);
+    tab.querySelector('.survey-panel-tab__label').textContent = done ? 'Questions ✓' : 'Questions';
+    tab.title = done ? 'You have answered the questions for this task' : 'Answer the questions for this task (required before you submit)';
+}
+
+function setSurveyPanelOpen(open) {
+    document.getElementById('surveyModal').classList.toggle('hidden', !open);
+    updateSurveyPanelTab();
+    logActivity(open ? 'recurrent_panel_open' : 'recurrent_panel_close', {
+        occurrence: surveyData.periodicSurveyOccurrenceCount,
+        pending: !!surveyData.pendingSurvey
+    });
+}
+
+function openSurveyPanelFromTab() {
+    if (surveyData.sidePanelDone) {
+        addTerminalOutput('You have already answered the questions for this task.', 'info');
+        return;
+    }
+    // Reopen with the answers given so far, or start answering
+    if (surveyData.pendingSurvey) setSurveyPanelOpen(true);
+    else showPeriodicSurvey('student');
+}
+
+function showPeriodicSurvey(trigger) {
     if (surveyData.questions.length === 0) {
         console.warn('No survey questions loaded');
         return;
     }
+    const panel = surveySidePanelOn();
     
     // Increment occurrence counter
     surveyData.periodicSurveyOccurrenceCount++;
@@ -5347,7 +5461,9 @@ function showPeriodicSurvey() {
     const aiHistorySnapshot = collectAIHistoryContext();
     
     surveyData.pendingSurvey = true;
-    blockEditor(true);
+    surveyData.currentTrigger = trigger || 'interval';
+    surveyData.currentShownAt = Date.now();
+    if (!panel) blockEditor(true);
     
     // Generate survey HTML
     const questionsHTML = generateSurveyHTML(surveyData.questions);
@@ -5362,18 +5478,26 @@ function showPeriodicSurvey() {
     // Update header to show occurrence number
     const surveyHeader = document.querySelector('#surveyModal .survey-header h2');
     if (surveyHeader) {
-        surveyHeader.textContent = `Periodic Survey #${surveyData.periodicSurveyOccurrenceCount}`;
+        surveyHeader.textContent = panel
+            ? 'Questions for this task'
+            : `Periodic Survey #${surveyData.periodicSurveyOccurrenceCount}`;
     }
     
-
-    
-    // Show modal
-    document.getElementById('surveyModal').classList.remove('hidden');
+    // Show modal (or open the side panel)
+    const modal = document.getElementById('surveyModal');
+    modal.classList.remove('survey-modal--final');
+    setupSurveySidePanel();
+    modal.classList.remove('hidden');
+    updateSurveyPanelTab();
     
     // Add event listeners
     setupSurveyEventListeners('surveyModal', 'submitSurvey', submitPeriodicSurvey);
     
-    addTerminalOutput(`Survey ${Math.floor(surveyData.analysisCount / surveyData.surveyInterval)} appeared - please complete to continue coding`, 'info');
+    if (panel) {
+        logActivity('recurrent_panel_open', { occurrence: surveyData.periodicSurveyOccurrenceCount, pending: true, trigger: surveyData.currentTrigger });
+    } else {
+        addTerminalOutput(`Survey ${Math.floor(surveyData.analysisCount / surveyData.surveyInterval)} appeared - please complete to continue coding`, 'info');
+    }
 }
 function showFinalSurvey() {
     if (surveyData.questions.length === 0) {
@@ -5385,6 +5509,8 @@ function showFinalSurvey() {
     
     // Increment occurrence counter for final survey
     surveyData.periodicSurveyOccurrenceCount++;
+    surveyData.currentTrigger = 'submission';
+    surveyData.currentShownAt = Date.now();
     
     // CAPTURE AI HISTORY NOW (not at submission time)
     const aiHistorySnapshot = collectAIHistoryContext();
@@ -5413,8 +5539,12 @@ function showFinalSurvey() {
         surveyNote.textContent = 'Complete this final survey to proceed with code submission.';
     }
     
-    // Show survey modal
-    document.getElementById('surveyModal').classList.remove('hidden');
+    // Show survey modal (in side panel mode it can't be closed: it is required to submit)
+    const modal = document.getElementById('surveyModal');
+    setupSurveySidePanel();
+    modal.classList.add('survey-modal--final');
+    modal.classList.remove('hidden');
+    updateSurveyPanelTab();
     
     // Reuse setup for event listeners and validation
     setupSurveyEventListeners('surveyModal', 'submitSurvey', submitFinalSurvey);
@@ -5461,7 +5591,7 @@ function generateSurveyHTML(questions) {
         if (q.type === 'open_ended') {
             const minLen = q.min_length || 0;
             const maxLen = q.max_length || 1000;
-            inputHTML = `<textarea class="survey-textarea" name="question_${index}" placeholder="${q.placeholder || 'Enter your response...'}" maxlength="${maxLen}" style="width:100%;min-height:80px;padding:10px;background:#1e1e1e;color:#d4d4d4;border:1px solid #444;border-radius:6px;font-size:14px;resize:vertical;margin-top:8px;" data-min-length="${minLen}"></textarea>
+            inputHTML = `<textarea class="survey-textarea" name="question_${index}" placeholder="${q.placeholder || 'Enter your response...'}" maxlength="${maxLen}" style="width:100%;min-height:160px;padding:10px;background:#1e1e1e;color:#d4d4d4;border:1px solid #444;border-radius:6px;font-size:14px;resize:vertical;margin-top:8px;" data-min-length="${minLen}"></textarea>
                 <div class="char-counter" style="font-size:11px;color:#888;margin-top:4px;">0 / ${maxLen}${minLen > 0 ? ` (min ${minLen})` : ''}</div>`;
         } else if ((q.type === 'multiple_choice' || q.type === 'checkboxes') && q.options) {
             // Single choice keeps storing the option index; checkboxes store the option texts.
@@ -5744,19 +5874,9 @@ function isSurveyQuestionDivAnswered(div) {
     return false;
 }
 
-/** Split the survey into pages: each diagram question alone, other questions grouped. */
+/** Split the survey into pages: one question per page. */
 function setupPeriodicSurveyPages(modal, questionsPanel, submitButton) {
-    const pages = [];
-    let group = null;
-    questionsPanel.querySelectorAll('.survey-question').forEach(div => {
-        if (div.querySelector('.diagram-q-mount')) {
-            pages.push([div]);
-            group = null;
-        } else {
-            if (!group) { group = []; pages.push(group); }
-            group.push(div);
-        }
-    });
+    const pages = Array.from(questionsPanel.querySelectorAll('.survey-question'), div => [div]);
     if (!pages.length) pages.push([]);
 
     let nav = modal.querySelector('.survey-pager');
@@ -5793,7 +5913,7 @@ function setupPeriodicSurveyPages(modal, questionsPanel, submitButton) {
     next.onclick = async () => {
         const missing = pages[current].find(div => div.dataset.required !== 'false' && !isSurveyQuestionDivAnswered(div));
         if (missing) {
-            alert('Please answer the required questions on this page.');
+            alert('Please answer this question before going on.');
             return;
         }
         for (const div of pages[current]) {
@@ -5862,6 +5982,18 @@ function setupSurveyEventListeners(modalId, submitButtonId, submitFunction) {
         });
     });
 
+    // Mic button under each open-ended answer (Whisper in the browser; no audio is stored)
+    if (window.VoiceInput) {
+        questionsPanel.querySelectorAll('textarea.survey-textarea').forEach(ta => VoiceInput.attach(ta));
+        if (!questionsPanel.dataset.voiceLogged) {
+            questionsPanel.dataset.voiceLogged = '1';
+            questionsPanel.addEventListener('voiceinput', e => {
+                logActivity('survey_voice_input', Object.assign({
+                    question: e.target.name, occurrence: surveyData.periodicSurveyOccurrenceCount
+                }, e.detail));
+            });
+        }
+    }
     mountPeriodicDiagramWidgets(questionsPanel, checkSurveyCompletion);
     setupPeriodicSurveyPages(modal, questionsPanel, submitButton);
 
@@ -5891,7 +6023,9 @@ async function submitPeriodicSurvey() {
             timestamp: new Date().toISOString(),
             analysisCount: surveyData.analysisCount,
             responses: responses,
-            ai_history_at_survey: aiSnapshotCompact
+            ai_history_at_survey: aiSnapshotCompact,
+            trigger: surveyData.currentTrigger || 'interval',  // 'interval' | 'student' (opened from the side panel tab)
+            display: surveySidePanelOn() ? 'side_panel' : 'modal'
         };
         surveyData.surveyResponses.push(surveyEntry);
         
@@ -5904,9 +6038,12 @@ async function submitPeriodicSurvey() {
         document.getElementById('surveyModal').classList.add('hidden');
         blockEditor(false);
         surveyData.pendingSurvey = false;
+        if (surveySidePanelOn()) surveyData.sidePanelDone = true;
+        updateSurveyPanelTab();
         
         const aiHistoryCount = currentSession.guessHistory.length;
-        addTerminalOutput('Survey completed successfully - you can continue coding!', 'success');
+        addTerminalOutput(surveySidePanelOn() ? 'Thanks! Your answers for this task are saved.'
+            : 'Survey completed successfully - you can continue coding!', 'success');
         addTerminalOutput(`AI History: ${aiHistoryCount} analyses captured with survey`, 'info');
     } catch (error) {
         console.error('Survey submission error:', error);
@@ -5955,6 +6092,7 @@ async function submitFinalSurvey() {
         
         // Hide the modal
         document.getElementById('surveyModal').classList.add('hidden');
+        updateSurveyPanelTab();
         
         const aiHistoryCount = currentSession.guessHistory.length;
         addTerminalOutput('Final periodic survey completed!', 'success');
@@ -6538,7 +6676,13 @@ async function saveSurveyResponses(responses, surveyType) {
                 responses: responses,
                 analysis_count: surveyData.analysisCount,
                 timestamp: new Date().toISOString(),
-                ai_history_context: aiHistoryContext
+                ai_history_context: aiHistoryContext,
+                problem_index: currentSession.currentProblemIndex || 0,
+                occurrence: surveyData.periodicSurveyOccurrenceCount,
+                shown_at: surveyData.currentShownAt ? new Date(surveyData.currentShownAt).toISOString() : null,
+                duration_seconds: surveyData.currentShownAt ? (Date.now() - surveyData.currentShownAt) / 1000 : null,
+                trigger: surveyData.currentTrigger || 'interval',
+                display: surveySidePanelOn() ? 'side_panel' : 'modal'
             })
         });
 
@@ -6655,6 +6799,8 @@ async function loadSurveyQuestions() {
                 } else {
                     surveyData.questions = [];
                 }
+                surveyData.sidePanel = ps.side_panel === true;
+                surveyData.sidePanelDone = ps.answered === true;
                 const interval = Number(ps.interval);
                 applyInterval(!Number.isNaN(interval) && interval > 0 ? interval : fallbackInterval);
                 // Apply per-quiz start point
@@ -6685,6 +6831,10 @@ async function loadSurveyQuestions() {
     } catch (error) {
         console.error('Error loading survey config:', error);
         applyDefaults();
+    }
+    setupSurveySidePanel();
+    if (surveySidePanelOn() && !surveyData.sidePanelDone) {
+        addTerminalOutput('This task has a few questions: open "Questions" on the right edge and answer them before you submit.', 'info');
     }
 }
 
@@ -6758,6 +6908,13 @@ async function submitToDatabase() {
     }
 
     // Check for pending survey before submission
+    // Side panel: the task questions must be answered (once) before the code is submitted
+    if (surveySidePanelOn() && !surveyData.sidePanelDone) {
+        addTerminalOutput('⚠️ Please answer the questions for this task before submitting your code', 'warning');
+        openSurveyPanelFromTab();
+        alert('Please answer the questions for this task (opened on the right) before submitting your code.');
+        return;
+    }
     if (surveyData.pendingSurvey) {
         addTerminalOutput('⚠️ Please complete the pending survey before submitting code', 'warning');
         alert('Please complete the pending survey before submitting your code.');
@@ -6793,6 +6950,7 @@ async function submitToDatabase() {
 
     // Check if final periodic survey is needed (same gate as mid-task periodic: must be enabled)
     if (surveyData.questions.length > 0 &&
+        !surveySidePanelOn() &&  // side panel questions were already answered once above
         !surveyData.finalSurveyResponse &&
         !currentSession.finalSurveyDisabled &&
         currentSession.periodicSurveyEnabled) {
@@ -6878,6 +7036,7 @@ async function checkAndShowPostSurvey() {
                 body: JSON.stringify({
                     session_id: currentSession.sessionId,
                     code: code,
+                    files: window.WS ? WS.list() : [],
                     programming_language: currentSession.programmingLanguage || 'python',
                 })
             });
@@ -7433,7 +7592,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Prevent ESC key from closing modal
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && surveyData.pendingSurvey) {
+        if (e.key === 'Escape' && surveyData.pendingSurvey && !surveySidePanelOn()) {
             e.preventDefault();
             addTerminalOutput('⚠️ Please complete the survey to continue', 'warning');
         }

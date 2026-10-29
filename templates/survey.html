@@ -6,6 +6,7 @@
     <title>Survey - AI Code Assistant</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script src="/static/diagram-widget.js"></script>
+    <script src="/static/voice-input.js"></script>
     <style>
         * {
             margin: 0;
@@ -1886,6 +1887,7 @@
                 
                 container.appendChild(textarea);
                 container.appendChild(charCounter);
+                if (window.VoiceInput) VoiceInput.attach(textarea);  // mic button: speak, then edit the text
                 
                 return container;
             }

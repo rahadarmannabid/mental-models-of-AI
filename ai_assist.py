@@ -17,7 +17,9 @@ from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
 
-COMPLETION_MODEL = os.getenv("COMPLETION_MODEL", "gpt-4.1-nano")
+COMPLETION_MODEL = os.getenv("COMPLETION_MODEL", "gpt-5.4-nano")
+# GPT-5 models think before answering; keep it off for fast inline suggestions ("minimal" for gpt-5-nano)
+COMPLETION_REASONING_EFFORT = os.getenv("COMPLETION_REASONING_EFFORT", "none")
 AGENT_MODEL = os.getenv("AGENT_MODEL", "gpt-4.1-mini")
 
 AGENT_MODES = ("ask", "agent", "plan", "debug")
@@ -35,8 +37,28 @@ _COMPLETION_SYSTEM = (
     "explanations, no markdown fences, never repeat code that is already before or after "
     "the cursor. Finish the current line and, when the intent is clear, continue with the "
     "next lines of the same logical block (at most {max_lines} lines). Match the file's "
-    "indentation. If nothing useful can be added, reply with nothing."
+    "indentation. If nothing useful can be added, reply with nothing. Other files the "
+    "student has open may be included before the file for reference: use their names, "
+    "signatures and behavior, but only insert text into the file with <CURSOR>."
 )
+
+# Budget for other open editor tabs sent with each completion request
+COMPLETION_MAX_OPEN_FILES = 5
+COMPLETION_OPEN_FILE_CHARS = 3000
+COMPLETION_OPEN_TOTAL_CHARS = 8000
+
+
+def _open_files_context(open_files: List[Tuple[str, str]], filename: str) -> str:
+    parts, total = [], 0
+    for name, content in open_files[:COMPLETION_MAX_OPEN_FILES]:
+        if name == filename or not content.strip():
+            continue
+        body = content[:COMPLETION_OPEN_FILE_CHARS]
+        if total + len(body) > COMPLETION_OPEN_TOTAL_CHARS:
+            break
+        total += len(body)
+        parts.append(f"--- {name} (open in another tab) ---\n{body}")
+    return "\n\n".join(parts) + "\n\n" if parts else ""
 
 
 def _strip_fences(text: str) -> str:
@@ -82,18 +104,34 @@ def clean_completion(completion: str, prefix: str, suffix: str, max_lines: int) 
     return "\n".join(lines).rstrip()
 
 
+def completion_params(model: str, max_tokens: int) -> Dict[str, Any]:
+    """Length/sampling settings for chat.completions: GPT-5 (reasoning) models take
+    max_completion_tokens and reasoning_effort and reject temperature. They go in extra_body
+    because the pinned openai SDK (1.35) predates these parameters."""
+    if model.startswith(("gpt-5", "o1", "o3", "o4")):
+        return {"extra_body": {"max_completion_tokens": max_tokens, "reasoning_effort": COMPLETION_REASONING_EFFORT}}
+    return {"temperature": 0, "max_tokens": max_tokens}
+
+
 async def inline_completion(
-    client: AsyncOpenAI, *, language: str, filename: str, prefix: str, suffix: str, max_lines: int = 8
+    client: AsyncOpenAI,
+    *,
+    language: str,
+    filename: str,
+    prefix: str,
+    suffix: str,
+    open_files: Optional[List[Tuple[str, str]]] = None,
+    max_lines: int = 8,
 ) -> str:
     prefix = prefix[-4000:]
     suffix = suffix[:1500]
+    context = _open_files_context(open_files or [], filename)
     resp = await client.chat.completions.create(
         model=COMPLETION_MODEL,
-        temperature=0,
-        max_tokens=200,
+        **completion_params(COMPLETION_MODEL, 200),
         messages=[
             {"role": "system", "content": _COMPLETION_SYSTEM.format(language=language, max_lines=max_lines)},
-            {"role": "user", "content": f"File: {filename}\n{prefix}<CURSOR>{suffix}"},
+            {"role": "user", "content": f"{context}File: {filename}\n{prefix}<CURSOR>{suffix}"},
         ],
     )
     return clean_completion(resp.choices[0].message.content or "", prefix, suffix, max_lines)
@@ -158,11 +196,25 @@ _TOOL_DEFS: Dict[str, Dict[str, Any]] = {
             "required": ["filename", "stdin"],
         },
     },
+    "install_package": {
+        "description": (
+            "pip install Python packages from PyPI into the student's environment (Python only). "
+            "The student is asked to approve first and may decline. numpy, pandas and matplotlib "
+            "are already installed."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"packages": {"type": "array", "items": {"type": "string"},
+                                        "description": "Package names, optionally with versions, e.g. requests or flask==3.0"}},
+            "required": ["packages"],
+        },
+    },
 }
 
 _READ_TOOLS = ["list_files", "read_file"]
 _WRITE_TOOLS = _READ_TOOLS + ["edit_file", "write_file", "delete_file", "run_code"]
 _MODE_TOOLS = {"ask": _READ_TOOLS, "plan": _READ_TOOLS, "agent": _WRITE_TOOLS, "debug": _WRITE_TOOLS}
+MAX_INSTALL_PACKAGES = 10
 
 _BASE_PROMPT = """You are an AI coding agent built into a browser IDE, working with a student the way Cursor's agent does.
 Workspace language: {language}. Active file: {active_file}.
@@ -194,18 +246,117 @@ def _number_lines(content: str) -> str:
     return "\n".join(f"{i:4}| {ln}" for i, ln in enumerate(lines, 1))
 
 
-def _short_diff(before: str, after: str, filename: str, limit: int = 6000) -> str:
-    diff = "".join(
-        difflib.unified_diff(
-            before.splitlines(keepends=True), after.splitlines(keepends=True),
-            fromfile=f"a/{filename}", tofile=f"b/{filename}",
-        )
-    )
-    return diff if len(diff) <= limit else diff[:limit] + "\n… (diff truncated)"
+# ─── Git-style workspace history for the agent log ──────────────────────────
+# The full code is stored once per problem (the first agent turn's "workspace_before"); after that,
+# every turn stores only patches, like `git diff`:
+#   workspace_diff_before  what changed since the previous turn ended (the student's own edits, Undo, ...)
+#   edits[i].diff          each change the agent made, in order
+# rebuild_workspaces() replays them to get the exact code at any turn.
+
+def _file_diff(filename: str, before: Optional[str], after: Optional[str]) -> str:
+    """Unified diff of one file (None = file absent). Complete, so it can be applied back exactly."""
+    if before == after:
+        return ""
+    head = f"diff --git a/{filename} b/{filename}\n"
+    if before is None:
+        head += "new file\n"
+    elif after is None:
+        head += "deleted file\n"
+    old, new = (before or "").splitlines(keepends=True), (after or "").splitlines(keepends=True)
+    out = [head]
+    for line in difflib.unified_diff(old, new, fromfile="/dev/null" if before is None else f"a/{filename}",
+                                     tofile="/dev/null" if after is None else f"b/{filename}"):
+        out.append(line)
+        if not line.endswith("\n"):  # last line of a file without a trailing newline
+            out.append("\n\\ No newline at end of file\n")
+    return "".join(out)
+
+
+def ws_to_list(ws: Dict[str, str]) -> List[Dict[str, str]]:
+    return [{"filename": n, "content": c} for n, c in ws.items()]
+
+
+def ws_from_list(files: Any) -> Dict[str, str]:
+    if isinstance(files, dict):  # older records
+        return dict(files)
+    return {f["filename"]: f.get("content") or "" for f in files or [] if isinstance(f, dict) and f.get("filename")}
+
+
+def workspace_diff(before: Dict[str, str], after: Dict[str, str]) -> str:
+    """git-diff-style patch turning workspace `before` into `after` (empty string: no change)."""
+    return "".join(_file_diff(n, before.get(n), after.get(n)) for n in sorted(set(before) | set(after)))
+
+
+def apply_workspace_diff(ws: Dict[str, str], patch: str) -> Dict[str, str]:
+    """Apply a patch from workspace_diff()/_file_diff() to a workspace and return the new workspace."""
+    out = dict(ws)
+    blocks = re.split(r"^diff --git a/(.+?) b/.+\n", patch, flags=re.M)
+    for name, body in zip(blocks[1::2], blocks[2::2]):
+        if body.startswith("deleted file\n"):
+            out.pop(name, None)
+            continue
+        old = (out.get(name) or "").splitlines(keepends=True)
+        new: List[str] = []
+        pos = 0  # next unconsumed line of `old`
+        side = ""  # which side the previous hunk line was on, for "\ No newline at end of file"
+        for line in body.splitlines(keepends=True):
+            if line.startswith(("---", "+++", "new file")):
+                continue
+            m = re.match(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@", line)
+            if m:
+                start = int(m.group(1)) - (0 if m.group(2) == "0" else 1)
+                new.extend(old[pos:start])
+                pos = start
+                continue
+            if line.startswith("\\"):
+                if side in (" ", "+") and new:
+                    new[-1] = new[-1].rstrip("\n")
+                continue
+            tag, text = line[:1], line[1:]
+            if tag == " ":
+                new.append(old[pos])
+                pos += 1
+            elif tag == "-":
+                pos += 1
+            elif tag == "+":
+                new.append(text)
+            side = tag
+        new.extend(old[pos:])
+        out[name] = "".join(new)
+    return out
+
+
+def rebuild_workspaces(agent_log: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """For analysis: replay one session's agent_log and return, per turn, the full code before and after it.
+
+    Returns [{"turn_id", "problem_index", "before": {file: code}, "after": {file: code}}, ...].
+    """
+    out: List[Dict[str, Any]] = []
+    ws: Dict[str, str] = {}
+    for rec in agent_log:
+        if rec.get("workspace_before") is not None:
+            ws = ws_from_list(rec["workspace_before"])
+        elif rec.get("workspace_diff_before"):
+            ws = apply_workspace_diff(ws, rec["workspace_diff_before"])
+        before = dict(ws)
+        for e in rec.get("edits") or []:
+            ws = apply_workspace_diff(ws, e.get("diff") or "")
+        out.append({"turn_id": rec.get("turn_id"), "problem_index": rec.get("problem_index"),
+                    "before": before, "after": dict(ws)})
+    return out
+
+
+def _can_install(mode: str, language: str) -> bool:
+    return mode in ("agent", "debug") and (language or "").lower() == "python"
 
 
 def build_system_prompt(mode: str, language: str, active_file: str, skills: List[Dict[str, str]]) -> str:
     parts = [_BASE_PROMPT.format(language=language, active_file=active_file or "(none)"), _MODE_PROMPTS[mode]]
+    if _can_install(mode, language):
+        parts.append("If the code needs a package that is not installed (ModuleNotFoundError), call install_package "
+                     "right away: do not ask for permission in chat or tell the student to run pip, because the tool "
+                     "itself asks the student to approve. If the student declines, do not try again; work without "
+                     "the package or explain what they can do.")
     if skills:
         parts.append(
             "## Skills\nFollow these skills whenever they are relevant:\n\n"
@@ -227,6 +378,9 @@ def _workspace_context(ws: Dict[str, str], terminal_output: Optional[str]) -> st
 
 
 RunCode = Callable[[str, List[Dict[str, str]], str, Optional[str]], Awaitable[Dict[str, Any]]]
+InstallPackages = Callable[[List[str]], Awaitable[Dict[str, Any]]]
+# Waits for the student's answer to an install request: "always" | "once" | "deny" | "timeout"
+WaitApproval = Callable[[str], Awaitable[str]]
 
 
 class AgentTurn:
@@ -245,6 +399,10 @@ class AgentTurn:
         skills: List[Dict[str, str]],
         terminal_output: Optional[str],
         run_code: RunCode,
+        base_ws: Optional[Dict[str, str]] = None,
+        install_packages: Optional[InstallPackages] = None,
+        wait_approval: Optional[WaitApproval] = None,
+        auto_install: bool = False,
     ):
         self.client = client
         self.mode = mode if mode in AGENT_MODES else "ask"
@@ -257,16 +415,27 @@ class AgentTurn:
         self.skills = skills
         self.terminal_output = terminal_output
         self.run_code = run_code
+        self.install_packages = install_packages
+        self.wait_approval = wait_approval
+        self.auto_install = auto_install  # the student chose "Always allow" earlier
         self.record: Dict[str, Any] = {
             "turn_id": uuid.uuid4().hex[:12],
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "mode": self.mode,
             "model": AGENT_MODEL,
-            "message": message,
+            "message": message,  # what the student typed (the prompt)
+            "active_file": self.active_file,
+            "history_messages": len(history[-20:]),  # earlier chat messages sent along
             "skills": [s.get("name", "") for s in skills],
+            # Code when the prompt was sent, git style: the full workspace on the first turn of a problem,
+            # otherwise only a patch against the end of the previous turn (base_ws). See rebuild_workspaces().
+            # Lists, not {filename: code}: Firebase keys can't contain "." (main.py)
+            "workspace_before": ws_to_list(self.ws) if base_ws is None else None,
+            "workspace_diff_before": workspace_diff(base_ws, self.ws) if base_ws is not None else None,
             "response": "",
             "tool_calls": [],
             "edits": [],
+            "installs": [],  # install_package requests: packages, decision, wait_ms, success
             "usage": {},
             # Filled in as the turn runs (see run() and main.agent_chat):
             # index, problem_index, ended_at, duration_ms, first_output_ms, status,
@@ -274,6 +443,9 @@ class AgentTurn:
         }
         self._t0 = time.monotonic()
         self._partial_text = ""  # text of the current model step, kept if the student stops mid-answer
+
+    def _installable(self) -> bool:
+        return _can_install(self.mode, self.language) and self.install_packages is not None
 
     # Tool implementations -------------------------------------------------
 
@@ -335,7 +507,26 @@ class AgentTurn:
             text = f"success={res.get('success')}\nstdout:\n{out or '(empty)'}\nstderr:\n{errout or '(empty)'}"
             return text, {"type": "run", "filename": entry, "success": bool(res.get("success")),
                           "output": out, "error": errout}
+        if name == "install_package":
+            return await self._install(args)
         return f"Unknown tool: {name}", None
+
+    async def _install(self, args: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
+        pkgs = [str(p).strip() for p in args.get("packages") or [] if str(p).strip()][:MAX_INSTALL_PACKAGES]
+        decision = args.get("_decision", "deny")
+        entry = {"packages": pkgs, "decision": decision, "wait_ms": args.get("_wait_ms", 0),
+                 "at_ms": int((time.monotonic() - self._t0) * 1000)}
+        self.record["installs"].append(entry)
+        if decision not in ("always", "once"):
+            return ("The student did not approve installing " + ", ".join(pkgs) + ". Do not ask again in this turn; "
+                    "continue without it or explain what is needed."), None
+        if self.install_packages is None:
+            return "Installing packages is not available here.", None
+        res = await self.install_packages(pkgs)
+        out = (res.get("output") or "")[-3000:]
+        entry["success"] = bool(res.get("success"))
+        return (f"success={res.get('success')}\n{out or '(no output)'}",
+                {"type": "install", "packages": pkgs, "success": bool(res.get("success")), "output": out})
 
     def _apply(self, fn: str, content: str, action: str) -> Tuple[str, Optional[Dict[str, Any]]]:
         if len(content) > MAX_FILE_CHARS:
@@ -348,7 +539,7 @@ class AgentTurn:
                  "added": added, "removed": removed})
 
     def _log_edit(self, fn: str, action: str, before: str, after: str) -> Tuple[int, int]:
-        """Record one file change: what was added/removed (counted on the full diff) plus a capped diff."""
+        """Record one file change: lines added/removed and the complete patch (see rebuild_workspaces)."""
         full = list(difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm=""))
         added = sum(1 for ln in full if ln.startswith("+") and not ln.startswith("+++"))
         removed = sum(1 for ln in full if ln.startswith("-") and not ln.startswith("---"))
@@ -356,7 +547,7 @@ class AgentTurn:
             "filename": fn, "action": action,
             "at_ms": int((time.monotonic() - self._t0) * 1000),
             "lines_added": added, "lines_removed": removed,
-            "diff": _short_diff(before, after, fn),
+            "diff": _file_diff(fn, None if action == "create" else before, None if action == "delete" else after),
         })
         return added, removed
 
@@ -384,11 +575,11 @@ class AgentTurn:
                 "name": n, "strict": True, **_TOOL_DEFS[n],
                 "parameters": {**_TOOL_DEFS[n]["parameters"], "additionalProperties": False},
             }}
-            for n in _MODE_TOOLS[self.mode]
+            for n in _MODE_TOOLS[self.mode] + (["install_package"] if self._installable() else [])
         ]
-        messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": build_system_prompt(self.mode, self.language, self.active_file, self.skills)}
-        ]
+        system_prompt = build_system_prompt(self.mode, self.language, self.active_file, self.skills)
+        self.record["system_prompt"] = system_prompt
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         for h in self.history[-20:]:
             if h.get("role") in ("user", "assistant") and h.get("content"):
                 messages.append({"role": h["role"], "content": str(h["content"])[:8000]})
@@ -441,6 +632,24 @@ class AgentTurn:
                 except json.JSONDecodeError:
                     args = {}
                 label = args.get("filename") or ""
+                if c["name"] == "install_package":
+                    # Ask the student first (like Cursor), unless they chose "Always allow".
+                    pkgs = [str(p).strip() for p in args.get("packages") or [] if str(p).strip()][:MAX_INSTALL_PACKAGES]
+                    label = ", ".join(pkgs)
+                    approval_id = uuid.uuid4().hex[:12]
+                    if self.auto_install:
+                        args["_decision"] = "always"
+                    elif self.wait_approval is None or not pkgs:
+                        args["_decision"] = "deny"
+                    else:
+                        yield {"type": "approval", "id": approval_id, "packages": pkgs}
+                        asked = time.monotonic()
+                        args["_decision"] = await self.wait_approval(approval_id)
+                        args["_wait_ms"] = int((time.monotonic() - asked) * 1000)
+                    if args["_decision"] == "always":
+                        self.auto_install = True
+                    yield {"type": "approval_result", "id": approval_id, "packages": pkgs,
+                           "decision": args["_decision"], "auto": "_wait_ms" not in args and args["_decision"] == "always"}
                 yield {"type": "tool", "name": c["name"], "filename": label}
                 result, event = await self._tool(c["name"], args)
                 self.record["tool_calls"].append({"name": c["name"], "filename": label, "result": result[:500]})

@@ -19,7 +19,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: guessing_ide
-    image: rahadarmannabid/codeoracle:latest
+    image: rahadarmannabid/mental-model-of-ai:latest
     ports:
       - "8000:8000"
     depends_on:
@@ -75,7 +75,7 @@ services:
   # credentials. Internal network only (no internet). Each program runs as the unprivileged
   # `sandbox` user (SANDBOX_UID) with CPU/memory/output/process limits from sandbox.py.
   runner:
-    image: rahadarmannabid/codeoracle:latest
+    image: rahadarmannabid/mental-model-of-ai:latest
     container_name: codeoracle_runner
     command: ["uvicorn", "runner:app", "--host", "0.0.0.0", "--port", "8100", "--log-level", "warning"]
     user: root  # only to switch each student program to SANDBOX_UID

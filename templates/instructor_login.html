@@ -156,7 +156,7 @@
       <div class="back-link"><a href="/instructor/login">Change Email</a></div>
 
     {% else %}
-      <div class="info-box">Enter your email to receive a one-time password.</div>
+      <div class="info-box">Enter your email to receive a one-time password. After you log in, this browser keeps you signed in for {{ "1 day" if (login_hours or 24) == 24 else (login_hours ~ " hours") }}.</div>
 
       <form method="POST" action="/instructor/send-otp">
         <div class="form-group">

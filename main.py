@@ -612,9 +612,10 @@ if not RUNNER_URL:
 
 async def execute_code_safely(
     code: str, language: str, timeout: int = 10, files: Optional[List[Dict[str, str]]] = None,
-    key: str = "anonymous", stdin: Optional[str] = None,
+    key: str = "anonymous", stdin: Optional[str] = None, pkg_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Run code non-interactively (optional `stdin` text, then end-of-input) and collect its output."""
+    """Run code non-interactively (optional `stdin` text, then end-of-input) and collect its output.
+    `pkg_key` picks whose pip packages the program sees (defaults to `key`)."""
     language = (language or "").lower()
     if language == "javascript":
         return {"success": False, "output": "", "error": "JavaScript runs in the browser: use the Run button."}
@@ -625,18 +626,35 @@ async def execute_code_safely(
         files = [{"filename": name, "content": code}]
         entry = files[0]["filename"]
     if not RUNNER_URL:
-        return await sandbox.run_batch(key=key, language=language, files=files, entry=entry, stdin=stdin)
+        return await sandbox.run_batch(key=key, language=language, files=files, entry=entry, stdin=stdin,
+                                       pkg_key=pkg_key)
     try:
         async with httpx.AsyncClient(timeout=sandbox.LIMITS["batch_wall_seconds"] + sandbox.LIMITS["queue_seconds"] + 30) as hc:
             resp = await hc.post(
                 f"{RUNNER_URL}/execute", headers={"X-Runner-Token": RUNNER_TOKEN},
-                json={"key": key, "language": language, "files": files, "entry": entry, "stdin": stdin},
+                json={"key": key, "language": language, "files": files, "entry": entry, "stdin": stdin,
+                      "pkg_key": pkg_key},
             )
             resp.raise_for_status()
             return resp.json()
     except Exception as e:
         logger.error("Code runner unavailable: %s", e)
         return {"success": False, "output": "", "error": "The code runner is unavailable. Please try again shortly."}
+
+
+async def install_packages_safely(packages: List[str], *, key: str, pkg_key: str) -> Dict[str, Any]:
+    """pip install into `pkg_key`'s private package environment and collect the output."""
+    if not RUNNER_URL:
+        return await sandbox.pip_install_batch(key=key, pkg_key=pkg_key, packages=packages)
+    try:
+        async with httpx.AsyncClient(timeout=sandbox.LIMITS["pip_seconds"] * 2 + 30) as hc:
+            resp = await hc.post(f"{RUNNER_URL}/pip", headers={"X-Runner-Token": RUNNER_TOKEN},
+                                 json={"key": key, "pkg_key": pkg_key, "packages": packages})
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        logger.error("Code runner unavailable for pip: %s", e)
+        return {"success": False, "output": "The code runner is unavailable. Please try again shortly."}
 
 # Data Models
 class AuthRequest(BaseModel):
@@ -744,6 +762,8 @@ class SessionLog(BaseModel):
     total_problems: int = 1
     quiz_id: Optional[str] = None
     per_problem_submissions: List[Dict[str, Any]] = []
+    # When work on the current problem began (after its pre-survey); used for time spent per problem
+    current_problem_started_at: Optional[str] = None
 
     # Survey tracking
     pre_survey_status: str = "not_started"
@@ -789,6 +809,9 @@ class SessionLog(BaseModel):
     # Condition 3 (agent): one record per student message, and the student's own skills
     agent_log: List[Dict[str, Any]] = Field(default_factory=list)
     agent_skills: List[Dict[str, str]] = Field(default_factory=list)
+    # Code at the end of the last agent turn: the next turn logs only a patch against it (git style)
+    agent_workspace_base: Optional[List[Dict[str, str]]] = None  # [{filename, content}]
+    agent_workspace_base_problem: Optional[int] = None
 
 
 class SurveyResponse(BaseModel):
@@ -804,6 +827,13 @@ class SurveySubmission(BaseModel):
     analysis_count: int
     timestamp: str
     ai_history_context: Optional[Dict[str, Any]] = None  # NEW: Add AI history context
+    # Recurrent survey round details
+    problem_index: Optional[int] = None
+    occurrence: Optional[int] = None      # survey number within the session
+    shown_at: Optional[str] = None        # when the survey appeared
+    duration_seconds: Optional[float] = None  # from appearing to submit
+    trigger: Optional[str] = None         # 'interval' | 'student' (side panel tab) | 'submission' (final)
+    display: Optional[str] = None         # 'modal' | 'side_panel'
 
 class SurveyConfig(BaseModel):
     questions: List[str]
@@ -843,10 +873,11 @@ def _merge_session_fields(loaded: Dict[str, Any], mine: Dict[str, Any], stored: 
 class ActiveSessionMap:
     """Dict-like SessionLog storage. Use Redis when REDIS_URL is set (Koyeb multi-instance)."""
 
-    __slots__ = ("_redis", "_local", "_prefix", "_ttl")
+    __slots__ = ("_redis", "_local", "_prefix", "_ttl", "_signals")
 
     def __init__(self) -> None:
         self._local: Dict[str, SessionLog] = {}
+        self._signals: Dict[str, Tuple[str, float]] = {}  # in-memory put_signal values: name -> (value, expires)
         self._redis = None
         self._prefix = (os.getenv("SESSION_REDIS_KEY_PREFIX", "autosuggest:session:") or "autosuggest:session:").strip()
         self._ttl = int(os.getenv("SESSION_REDIS_TTL_SECONDS", "172800"))
@@ -993,6 +1024,21 @@ class ActiveSessionMap:
                     continue
                 if isinstance(data, dict):
                     yield full[len(p):], data
+
+    def put_signal(self, name: str, value: str, ttl: int = 900) -> None:
+        """Store a short-lived value another worker may be waiting for (e.g. an agent install approval)."""
+        if self._redis is None:
+            now = time.time()
+            self._signals = {k: v for k, v in self._signals.items() if v[1] > now}
+            self._signals[name] = (value, now + ttl)
+            return
+        self._redis.setex(self._prefix + "signal:" + name, ttl, value)
+
+    def get_signal(self, name: str) -> Optional[str]:
+        if self._redis is None:
+            hit = self._signals.get(name)
+            return hit[0] if hit and hit[1] > time.time() else None
+        return cast(Optional[str], self._redis.get(self._prefix + "signal:" + name))
 
     def session_store_backend(self) -> str:
         """Return 'redis' or 'memory' for health/metrics."""
@@ -1187,9 +1233,10 @@ from starlette.middleware.sessions import SessionMiddleware
 app.add_middleware(
     SessionMiddleware,
     secret_key=os.getenv("SESSION_SECRET_KEY", "change-me-in-production"),
-    # Instructors log in with an emailed OTP; keep them signed in for 14 days so they are not
-    # asked for a new code all the time. SESSION_SECRET_KEY must stay the same across restarts.
-    max_age=14 * 24 * 3600,
+    # Instructors log in with an emailed OTP and stay signed in on that browser for
+    # INSTRUCTOR_LOGIN_HOURS (default 1 day; instructor.py also checks the login time).
+    # SESSION_SECRET_KEY must stay the same across restarts.
+    max_age=int(os.getenv("INSTRUCTOR_LOGIN_HOURS", "24")) * 3600,
 )
 
 
@@ -1313,9 +1360,30 @@ _last_editor_full_checkpoint_at: Dict[str, float] = {}
 EDITOR_FULL_CHECKPOINT_SEC = float(os.getenv("EDITOR_FULL_CHECKPOINT_SEC", "45"))
 
 
+_FIREBASE_BAD_KEY_CHARS = set(".#$[]/")
+
+
+def firebase_safe_keys(value: Any) -> Any:
+    """Percent-encode dict keys Firebase rejects (". # $ [ ] /", empty, control chars) so one odd key
+    (a file name, a survey matrix row ending in ".") can't make the whole write fail."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            k = str(k)
+            if not k or any(c in _FIREBASE_BAD_KEY_CHARS or ord(c) < 32 or ord(c) == 127 for c in k):
+                k = "".join(f"%{ord(c):02X}" if c in _FIREBASE_BAD_KEY_CHARS or c == "%" or ord(c) < 32
+                            or ord(c) == 127 else c for c in k) or "%00"
+            out[k] = firebase_safe_keys(v)
+        return out
+    if isinstance(value, list):
+        return [firebase_safe_keys(v) for v in value]
+    return value
+
+
 def firebase_rtdb_set_with_retry(ref, value, *, max_attempts: int = 3) -> bool:
     """Realtime Database set() with exponential backoff."""
     last_err: Optional[Exception] = None
+    value = firebase_safe_keys(value)
     for attempt in range(max_attempts):
         try:
             ref.set(value)
@@ -1346,7 +1414,7 @@ def append_periodic_survey_to_firebase(session_id: str, survey_data: Dict[str, A
         return False
     try:
         per_ref = firebase_db.child("sessions").child(session_id).child("periodic_surveys")
-        per_ref.push(survey_data)
+        per_ref.push(firebase_safe_keys(survey_data))
         return True
     except Exception as e:
         logger.error("append_periodic_survey_to_firebase failed: %s", e)
@@ -1511,6 +1579,7 @@ def assignment_resume_write(
 def firebase_rtdb_update_with_retry(ref, value: Dict[str, Any], *, max_attempts: int = 3) -> bool:
     """Realtime Database update() with exponential backoff (shallow merge)."""
     last_err: Optional[Exception] = None
+    value = firebase_safe_keys(value)
     for attempt in range(max_attempts):
         try:
             ref.update(value)
@@ -1643,7 +1712,8 @@ def get_response(prompt):
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "system", "content": prompt}],
-            model="gpt-4.1-nano",
+            model=ai_assist.COMPLETION_MODEL,
+            **ai_assist.completion_params(ai_assist.COMPLETION_MODEL, 4000),
         )
         response = chat_completion.choices[0].message.content
         return response.strip() if response else ""
@@ -2772,6 +2842,31 @@ class SubmitRequest(BaseModel):
     activity_logs: Optional[List[Dict[str, Any]]] = None
 
 
+def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.astimezone()  # naive timestamps were written in server local time
+
+
+def _problem_record(session_log: SessionLog, code: str, files: Optional[List[Dict[str, str]]], **extra: Any) -> Dict[str, Any]:
+    """One per_problem_submissions entry: the problem's final code and files, and the time spent on it."""
+    now = datetime.now(timezone.utc)
+    started = _parse_iso(session_log.current_problem_started_at) or _parse_iso(session_log.code_start_timestamp)
+    return {
+        "problem_index": session_log.current_problem_index,
+        "code": code,
+        "files": files or None,
+        "started_at": started.isoformat() if started else None,
+        "timestamp": now.isoformat(),
+        "duration_seconds": round((now - started).total_seconds(), 1) if started else None,
+        **extra,
+    }
+
+
 def _merge_client_activity_logs(session_log: SessionLog, raw_logs: Optional[List[Dict[str, Any]]]) -> None:
     """Union server and client activity rows so Firebase keeps accept/reject and per-problem context."""
     if not raw_logs or not isinstance(raw_logs, list):
@@ -2980,6 +3075,7 @@ class CompletionRequest(BaseModel):
     filename: str = "main.py"
     prefix: str
     suffix: str = ""
+    open_files: List[FileItem] = []  # other files open in editor tabs
 
 
 @app.post("/complete")
@@ -2997,6 +3093,7 @@ async def inline_complete(request: CompletionRequest):
                 filename=request.filename,
                 prefix=request.prefix,
                 suffix=request.suffix,
+                open_files=[(f.filename, f.content) for f in request.open_files],
             )
         return {"completion": completion, "id": uuid.uuid4().hex[:12]}
     except Exception as e:
@@ -3020,8 +3117,22 @@ class AgentChatRequest(BaseModel):
     history: List[Dict[str, str]] = []
     skills: List[AgentSkill] = []
     terminal_output: Optional[str] = None
+    auto_install: bool = False  # the student chose "Always allow" for package installs
 
 
+AGENT_APPROVAL_TIMEOUT = int(os.getenv("AGENT_APPROVAL_TIMEOUT_SECONDS", "600"))
+
+
+async def _wait_agent_approval(session_id: str, approval_id: str) -> str:
+    """Wait for /agent/approve (possibly handled by another worker) to record the student's choice."""
+    name = f"agent-approval:{session_id}:{approval_id}"
+    deadline = time.monotonic() + AGENT_APPROVAL_TIMEOUT
+    while time.monotonic() < deadline:
+        decision = await asyncio.to_thread(active_sessions.get_signal, name)
+        if decision:
+            return decision
+        await asyncio.sleep(0.5)
+    return "timeout"
 
 
 @app.post("/agent/chat")
@@ -3034,8 +3145,15 @@ async def agent_chat(request: AgentChatRequest):
     if len(request.files) > ai_assist.MAX_FILES:
         raise HTTPException(status_code=400, detail="Too many files")
 
+    # First turn of a problem logs the full code; later turns only what changed since the last turn
+    sl_now = active_sessions[request.session_id]
+    base_ws = (ai_assist.ws_from_list(sl_now.agent_workspace_base)
+               if sl_now.agent_workspace_base is not None
+               and sl_now.agent_workspace_base_problem == int(sl_now.current_problem_index or 0) else None)
+
     turn = ai_assist.AgentTurn(
         async_client,
+        base_ws=base_ws,
         mode=request.mode,
         message=request.message,
         history=request.history,
@@ -3044,9 +3162,16 @@ async def agent_chat(request: AgentChatRequest):
         language=request.language,
         skills=[s.model_dump() for s in request.skills],
         terminal_output=request.terminal_output,
+        # Own run key (so agent runs don't stop the student's terminal) but the student's packages.
         run_code=lambda code, files, language, stdin: execute_code_safely(
-            code, language, files=files, key=f"{request.session_id}:agent", stdin=stdin
+            code, language, files=files, key=f"{request.session_id}:agent", stdin=stdin,
+            pkg_key=request.session_id,
         ),
+        install_packages=lambda packages: install_packages_safely(
+            packages, key=f"{request.session_id}:agent", pkg_key=request.session_id
+        ),
+        wait_approval=lambda approval_id: _wait_agent_approval(request.session_id, approval_id),
+        auto_install=request.auto_install,
     )
 
     def store_turn(sl: SessionLog) -> None:
@@ -3054,6 +3179,9 @@ async def agent_chat(request: AgentChatRequest):
         turn.record["index"] = len(sl.agent_log) + 1
         turn.record["problem_index"] = int(sl.current_problem_index or 0)
         sl.agent_log.append(turn.record)
+        sl.agent_workspace_base = ai_assist.ws_to_list(turn.ws)
+        sl.agent_workspace_base_problem = turn.record["problem_index"]
+        checkpoint_session_to_firebase(sl, "activity_batch")  # throttled; final submit always saves
 
     async def events():
         try:
@@ -3078,6 +3206,64 @@ async def agent_chat(request: AgentChatRequest):
         events(), media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+class AgentApprovalRequest(BaseModel):
+    session_id: str
+    approval_id: str = Field(max_length=32)
+    decision: str  # "always" | "once" | "deny"
+
+
+@app.post("/agent/approve")
+async def agent_approve(request: AgentApprovalRequest):
+    """The student's answer to the agent's request to install packages."""
+    if await _session_condition(request.session_id) != CONDITION_AGENT:
+        raise HTTPException(status_code=403, detail="The agent is not enabled for this session")
+    if request.decision not in ("always", "once", "deny"):
+        raise HTTPException(status_code=400, detail="Invalid decision")
+    await asyncio.to_thread(active_sessions.put_signal,
+                            f"agent-approval:{request.session_id}:{request.approval_id}", request.decision)
+    return {"ok": True}
+
+
+class AgentDecisionRequest(BaseModel):
+    session_id: str
+    turn_id: str = Field(max_length=32)
+    filename: str = Field(max_length=64)
+    decision: str  # "keep" | "undo"
+    time_to_decision_ms: Optional[int] = None
+
+
+@app.post("/agent/decision")
+async def agent_decision(request: AgentDecisionRequest):
+    """Keep / Undo of an agent edit, stored on the agent turn that made it."""
+    if await _session_condition(request.session_id) != CONDITION_AGENT:
+        raise HTTPException(status_code=403, detail="The agent is not enabled for this session")
+    if request.decision not in ("keep", "undo"):
+        raise HTTPException(status_code=400, detail="Invalid decision")
+    entry = {
+        "filename": request.filename,
+        "decision": request.decision,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "time_to_decision_ms": request.time_to_decision_ms,
+    }
+    found = False
+
+    def add(sl: SessionLog) -> None:
+        nonlocal found
+        for rec in reversed(sl.agent_log):
+            if rec.get("turn_id") == request.turn_id:
+                rec.setdefault("decisions", []).append(entry)
+                found = True
+                break
+        if found:
+            checkpoint_session_to_firebase(sl, "activity_batch")
+
+    try:
+        await asyncio.to_thread(active_sessions.update_fresh, request.session_id, add)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"ok": True, "found": found}
 
 
 class AgentSkillsRequest(BaseModel):
@@ -3193,12 +3379,8 @@ async def submit_code(request: SubmitRequest):
                 session_log.submitted_files = submitted_files
             # Record final problem code for instructor analytics (next-problem only stores intermediate)
             if session_log.quiz_id and session_log.total_problems >= 1:
-                session_log.per_problem_submissions.append({
-                    "problem_index": session_log.current_problem_index,
-                    "code": code,
-                    "timestamp": timestamp,
-                    "final_submit": True,
-                })
+                session_log.per_problem_submissions.append(
+                    _problem_record(session_log, code, submitted_files, final_submit=True))
             _merge_client_activity_logs(session_log, request.activity_logs)
         
         detected_language = detect_programming_language(code)
@@ -3940,6 +4122,13 @@ async def submit_survey(request: SurveySubmission):
                 "user_id": request.user_id,
                 "assignment_key": request.assignment_key,
                 "responses": [r.dict() for r in request.responses],
+                "problem_index": (session_log.current_problem_index if session_log is not None
+                                  else request.problem_index),
+                "occurrence": request.occurrence,
+                "shown_at": request.shown_at,
+                "duration_seconds": request.duration_seconds,
+                "trigger": request.trigger,
+                "display": request.display,
             }
             if ai_ctx:
                 fb_payload["ai_history_context"] = ai_ctx
@@ -4103,6 +4292,13 @@ class SurveyStatusResponse(BaseModel):
     quiz_progress: Optional[QuizProgressMeta] = None
 
 
+def _side_panel_answered(session_id: Optional[str], problem_index: int) -> bool:
+    if not session_id or session_id not in active_sessions:
+        return False
+    return any(isinstance(s, dict) and s.get("display") == "side_panel" and s.get("problem_index") == problem_index
+               for s in active_sessions[session_id].periodic_surveys)
+
+
 @app.get("/survey-config/{assignment_key}")
 async def get_survey_config(assignment_key: str, problem_index: int = 0, session_id: Optional[str] = None):
     """
@@ -4149,6 +4345,9 @@ async def get_survey_config(assignment_key: str, problem_index: int = 0, session
                         "enabled": rec_enabled and bool(problem.get("recurrent_survey")),
                         "interval": int(problem.get("recurrent_survey_interval", 4)),
                         "start": int(problem.get("recurrent_survey_start", 5)),
+                        "side_panel": bool(problem.get("recurrent_survey_side_panel", False)),
+                        # Side panel questions are answered once per task; survives a page reload
+                        "answered": _side_panel_answered(session_id, idx),
                         "title": "Quick Check-in",
                         "description": "Please rate your current experience",
                         "questions": _questions_for_student(problem.get("recurrent_survey", [])) if rec_enabled else [],
@@ -4383,7 +4582,7 @@ async def save_diagram(body: DiagramSaveIn):
         fdb = firebase_db
         fb_record = {**record, "image": image}
         tasks.append(asyncio.to_thread(
-            lambda: fdb.child("diagrams").child(body.session_id).child(diagram_id).set(fb_record)
+            lambda: fdb.child("diagrams").child(body.session_id).child(diagram_id).set(firebase_safe_keys(fb_record))
         ))
     results = await asyncio.gather(*tasks, return_exceptions=True)
     errors = [r for r in results if isinstance(r, Exception)]
@@ -4856,6 +5055,8 @@ async def submit_pre_post_survey(request: PrePostSurveySubmission):
                 session_log.pre_survey_status = SurveyStatus.COMPLETED
                 session_log.pre_survey_timestamp = request.timestamp
                 session_log.pre_survey_responses = survey_package
+                # Coding time for this problem starts after its pre-survey
+                session_log.current_problem_started_at = datetime.now(timezone.utc).isoformat()
             elif request.survey_type == 'post':
                 session_log.post_survey_status = SurveyStatus.COMPLETED
                 session_log.post_survey_timestamp = request.timestamp
@@ -5583,6 +5784,16 @@ async def serve_diagram_widget():
     """Shared drawing widget for diagram survey questions (survey.html and the IDE's recurrent survey)."""
     return FileResponse(
         Path("static") / "diagram_widget.js",
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache"},
+    )
+
+
+@app.get("/static/voice-input.js")
+async def serve_voice_input():
+    """Mic button for open-ended answers: Whisper runs in the browser, audio is never uploaded or stored."""
+    return FileResponse(
+        Path("static") / "voice_input.js",
         media_type="application/javascript",
         headers={"Cache-Control": "no-cache"},
     )
@@ -6443,12 +6654,11 @@ async def quiz_next_problem(request: Request):
             "periodic_survey_interval": int(problem.get("recurrent_survey_interval", 4)),
         }
 
-    # Save current problem's code
-    session_log.per_problem_submissions.append({
-        "problem_index": session_log.current_problem_index,
-        "code": code,
-        "timestamp": datetime.now().isoformat(),
-    })
+    # Save current problem's code (all workspace files) and time spent
+    files = [{"filename": str(f.get("filename", ""))[:64], "content": str(f.get("content", ""))[:100_000]}
+             for f in (body.get("files") or [])[:20] if isinstance(f, dict)]
+    session_log.per_problem_submissions.append(_problem_record(session_log, code, files))
+    session_log.current_problem_started_at = datetime.now(timezone.utc).isoformat()
 
     old_idx = int(session_log.current_problem_index or 0)
     # Advance to next problem

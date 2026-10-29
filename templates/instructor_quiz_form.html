@@ -238,6 +238,10 @@
       border-radius: 8px; padding: 12px; margin-bottom: 16px;
     }
     .starter-file-card:last-child { margin-bottom: 0; }
+    .starter-files-wrap.is-dragover { border-color: var(--primary); border-style: dashed; }
+    .starter-hint { color: var(--muted); font-size: 0.85rem; margin: 0 0 12px; }
+    .starter-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+    .starter-filename.is-invalid { border-color: var(--danger-light) !important; }
 
     .remove-btn {
       background: rgba(239,68,68,0.1); border: 1px solid transparent; color: var(--danger-light);
@@ -379,6 +383,11 @@
     }
     .info-box label { font-size: 0.9rem; font-weight: 600; color: var(--primary); display: block; margin-bottom: 8px; }
     .inline-input-group { display: flex; align-items: center; gap: 12px; }
+    .side-panel-option { display: flex; align-items: flex-start; gap: 12px; }
+    .side-panel-option .toggle-switch { flex-shrink: 0; margin-top: 1px; }
+    .side-panel-option__title { font-weight: 600; color: var(--text); font-size: 0.95rem; }
+    .side-panel-option__hint { color: var(--muted); font-size: 0.85rem; line-height: 1.5; margin-top: 2px; }
+    #probRecurrentTrigger { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
     .inline-input-group input { width: 100px; padding: 10px; }
     .inline-input-group span { color: var(--muted); font-size: 0.85rem; }
 
@@ -581,9 +590,15 @@
     <div class="card">
       <h2>Starter Code (Boilerplate)</h2>
       <div class="code-tabs" id="codeTabs"></div>
-      <div class="starter-files-wrap">
+      <div class="starter-files-wrap" id="starterFilesWrap">
+        <p class="starter-hint">Write the starter code below, or upload code files (you can also drop them here). Uploaded files can still be edited. Up to 20 files per language, 100 KB each.</p>
         <div id="starterFilesContainer"></div>
-        <button class="add-btn" id="addFileBtn" onclick="addStarterFile()" style="margin-top:16px;">+ Add File</button>
+        <div class="starter-actions">
+          <button class="add-btn" id="addFileBtn" type="button" onclick="addStarterFile()">+ Add File</button>
+          <button class="add-btn" id="uploadFileBtn" type="button" onclick="document.getElementById('starterUploadInput').click()">Upload Files</button>
+          <input type="file" id="starterUploadInput" multiple style="display:none"
+                 accept=".py,.js,.c,.h,.cpp,.cc,.hpp,.java,.txt,.csv,.json,.md,.tsv,.xml,.yaml,.yml,.html,.css,.sql,.in,.dat">
+        </div>
       </div>
     </div>
 
@@ -676,16 +691,28 @@
 
       <div class="survey-panel" id="panel-prob-recurrent">
         <div class="info-box">
-          <label>Survey Trigger Logic</label>
-          <div class="inline-input-group" style="margin-bottom: 12px;">
-            <span style="width:200px; font-weight:500; color:var(--text);">First survey appears after</span>
-            <input type="number" id="probRecurrentStart" min="1" max="100" value="5">
-            <span>AI interactions</span>
+          <div class="side-panel-option">
+            <label class="toggle-switch">
+              <input type="checkbox" id="probRecurrentSidePanel" onchange="onSidePanelToggle()">
+              <span class="toggle-slider"></span>
+            </label>
+            <div>
+              <div class="side-panel-option__title">Show in a side panel</div>
+              <div class="side-panel-option__hint">Students answer these questions once during the task, in a panel they can open and close at any time. Nothing pops up during the task, and required questions must be answered before they submit their code.</div>
+            </div>
           </div>
-          <div class="inline-input-group">
-            <span style="width:200px; font-weight:500; color:var(--text);">Subsequently show every</span>
-            <input type="number" id="probRecurrentInterval" min="1" max="100" value="4">
-            <span>AI interactions</span>
+          <div id="probRecurrentTrigger">
+            <label>Survey Trigger Logic</label>
+            <div class="inline-input-group" style="margin-bottom: 12px;">
+              <span style="width:200px; font-weight:500; color:var(--text);">First survey appears after</span>
+              <input type="number" id="probRecurrentStart" min="1" max="100" value="5">
+              <span>AI interactions</span>
+            </div>
+            <div class="inline-input-group">
+              <span style="width:200px; font-weight:500; color:var(--text);">Subsequently show every</span>
+              <input type="number" id="probRecurrentInterval" min="1" max="100" value="4">
+              <span>AI interactions</span>
+            </div>
           </div>
         </div>
         <div id="probRecurrentSurveyList"></div>
@@ -1008,6 +1035,7 @@ function defaultSurveyFields() {
     recurrent_survey: JSON.parse(JSON.stringify(DEFAULT_RECURRENT_SURVEY)),
     recurrent_survey_interval: 4,
     recurrent_survey_start: 5,
+    recurrent_survey_side_panel: false,
   };
 }
 
@@ -1064,16 +1092,20 @@ document.addEventListener('DOMContentLoaded', async () => {
       recurrent_survey: hasSurveys ? (prob.recurrent_survey || []) : (quizRec.length ? quizRec : defaults.recurrent_survey),
       recurrent_survey_interval: hasSurveys ? (prob.recurrent_survey_interval || 4) : (quizRec.length ? quizRecInterval : defaults.recurrent_survey_interval),
       recurrent_survey_start: hasSurveys ? (prob.recurrent_survey_start || 5) : (quizRec.length ? quizRecStart : defaults.recurrent_survey_start),
+      recurrent_survey_side_panel: prob.recurrent_survey_side_panel === true,
     });
   });
   } else {
-  problemsData.push(Object.assign({
-    title: '',
-    problem_statement: '',
-    constraints: '',
-    test_cases: '',
-    starter_code: {},
-  }, defaultSurveyFields()));
+    // New quiz: start from the four autocompletion tasks (surveys/default_autocomplete_tasks.json)
+    const tasks = await loadDefaultTasks();
+    if (tasks.length) tasks.forEach(t => problemsData.push(t));
+    else problemsData.push(Object.assign({
+      title: '',
+      problem_statement: '',
+      constraints: '',
+      test_cases: '',
+      starter_code: {},
+    }, defaultSurveyFields()));
   }
 
   switchProblem(0);
@@ -1169,6 +1201,22 @@ function renderProblemTabs() {
   addBtn.onclick = addProblem;
   bar.appendChild(addBtn);
 
+  const tasksBtn = document.createElement('button');
+  tasksBtn.type = 'button';
+  tasksBtn.className = 'action-btn-sm';
+  tasksBtn.textContent = '+ Add 4 Autocompletion Tasks';
+  tasksBtn.title = 'Cart total, Print receipt, Strong password, Average speed: starter files, tests and side-panel questions';
+  tasksBtn.onclick = () => addDefaultTasks('autocomplete_tasks');
+  bar.appendChild(tasksBtn);
+
+  const agentTasksBtn = document.createElement('button');
+  agentTasksBtn.type = 'button';
+  agentTasksBtn.className = 'action-btn-sm';
+  agentTasksBtn.textContent = '+ Add 4 Coding Agent Tasks';
+  agentTasksBtn.title = 'Library late fees, Shop coupons, Grade report, Date countdown: starter files, tests and side-panel questions';
+  agentTasksBtn.onclick = () => addDefaultTasks('agent_tasks');
+  bar.appendChild(agentTasksBtn);
+
   if (problemsData.length > 1) {
     const rmBtn = document.createElement('button');
     rmBtn.type = 'button';
@@ -1200,6 +1248,7 @@ function saveCurrentProblem() {
     recurrent_survey: collectSurvey('probRecurrentSurveyList'),
     recurrent_survey_interval: parseInt(document.getElementById('probRecurrentInterval').value) || 4,
     recurrent_survey_start: parseInt(document.getElementById('probRecurrentStart').value) || 5,
+    recurrent_survey_side_panel: document.getElementById('probRecurrentSidePanel').checked,
   };
 }
 
@@ -1232,6 +1281,8 @@ function switchProblem(idx) {
   document.getElementById('toggleRecurrentSurvey').checked = prob.recurrent_survey_enabled !== false;
   document.getElementById('probRecurrentStart').value = prob.recurrent_survey_start || 5;
   document.getElementById('probRecurrentInterval').value = prob.recurrent_survey_interval || 4;
+  document.getElementById('probRecurrentSidePanel').checked = prob.recurrent_survey_side_panel === true;
+  onSidePanelToggle();
   renderSurveyList('probPreSurveyList', prob.pre_survey || []);
   renderSurveyList('probPostSurveyList', prob.post_survey || []);
   const postByCond = normalizePostByCondition(prob.post_survey_by_condition);
@@ -1246,6 +1297,47 @@ function switchProblem(idx) {
 
   problemRendered = true;
   renderProblemTabs();
+}
+
+/** The default study tasks as problems: statement, starter files with tests, and their questions in the side panel. */
+async function loadDefaultTasks(which = 'autocomplete_tasks') {
+  let tasks = [];
+  try { tasks = await loadPresetQuestions(which); } catch (e) { console.error('Default tasks failed to load:', e); }
+  return tasks.map(t => Object.assign(defaultSurveyFields(), {
+    title: t.title || '',
+    problem_statement: t.problem_statement || '',
+    constraints: t.constraints || '',
+    test_cases: t.test_cases || '',
+    starter_code: t.starter_code || {},
+    recurrent_survey_enabled: t.recurrent_survey_enabled !== false,
+    recurrent_survey: t.recurrent_survey || [],
+    recurrent_survey_side_panel: t.recurrent_survey_side_panel === true,
+  })).map((p, i) => {
+    // No general post-survey: only the task's own extra questions (e.g. Task 1's diagram question for code suggestions)
+    const extra = tasks[i].post_survey_extra_by_condition || {};
+    p.post_survey = [];
+    p.post_survey_by_condition = { 1: [], 2: [], 3: [] };
+    Object.keys(extra).forEach(c => { p.post_survey_by_condition[c] = extra[c].slice(); });
+    p.post_survey_enabled = Object.values(p.post_survey_by_condition).some(list => list.length > 0);
+    return p;
+  });
+}
+
+async function addDefaultTasks(which) {
+  saveCurrentProblem();
+  const tasks = await loadDefaultTasks(which);
+  if (!tasks.length) { showToast('Could not load the default tasks.', 'error'); return; }
+  const first = problemsData.length;
+  tasks.forEach(t => problemsData.push(t));
+  if (!getSelectedLanguages().includes('python')) showToast('The tasks use Python: select Python under Allowed Languages.', 'error');
+  switchProblem(first);
+  showToast(`Added ${tasks.length} ${which === 'agent_tasks' ? 'coding agent' : 'autocompletion'} tasks.`, 'success');
+}
+
+// Side panel: answered once per task, so the "appears after / every N" trigger settings don't apply
+function onSidePanelToggle() {
+  const on = document.getElementById('probRecurrentSidePanel').checked;
+  document.getElementById('probRecurrentTrigger').hidden = on;
 }
 
 function addProblem() {
@@ -1346,19 +1438,108 @@ function createFileCard(file, idx) {
       <input type="text" class="starter-filename" value="${escHtml(file.filename || '')}" placeholder="filename.ext" style="flex:1;font-family:'Fira Code',monospace;">
       <button class="remove-btn" onclick="UIMotion.remove(this.closest('.starter-file-card'))" title="Remove file">✕</button>
     </div>
-    <textarea class="starter-file-content code-area" placeholder="// Write starter code here...">${escHtml(file.content || '')}</textarea>
+    <textarea class="starter-file-content code-area" spellcheck="false" placeholder="// Write starter code here...">${escHtml(file.content || '')}</textarea>
   `;
+  const name = card.querySelector('.starter-filename');
+  name.addEventListener('input', () => name.classList.toggle('is-invalid', !!starterNameProblem(name.value.trim())));
+  name.addEventListener('blur', () => {
+    const problem = starterNameProblem(name.value.trim());
+    if (problem) showToast(problem, 'error');
+  });
+  card.querySelector('.starter-file-content').addEventListener('keydown', indentOnTab);
   return card;
+}
+
+// Same rule as the student workspace (workspace.js): no folders or spaces
+const STARTER_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;
+const STARTER_MAX_FILES = 20;
+const STARTER_MAX_BYTES = 100 * 1024;
+const STARTER_EXT = { python: 'py', javascript: 'js', c: 'c', cpp: 'cpp', java: 'java' };
+
+function starterNameProblem(name) {
+  if (!name) return 'Each starter file needs a name.';
+  if (!STARTER_NAME_RE.test(name)) return `"${name}": use letters, numbers, "_", "-" and "." only (no folders or spaces).`;
+  return '';
+}
+
+/** Tab / Shift+Tab indent in the starter code boxes instead of leaving the field. */
+function indentOnTab(e) {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+  const ta = e.target, start = ta.selectionStart, end = ta.selectionEnd, v = ta.value;
+  const lineStart = v.lastIndexOf('\n', start - 1) + 1;
+  if (start === end && !e.shiftKey) {
+    ta.setRangeText('    ', start, end, 'end');
+    return;
+  }
+  const block = v.slice(lineStart, end);
+  const changed = e.shiftKey
+    ? block.replace(/^ {1,4}/gm, '')
+    : block.replace(/^/gm, '    ');
+  ta.setRangeText(changed, lineStart, end, 'select');
 }
 
 function addStarterFile() {
   if (!activeCodeLang) return;
-  const extMap = { python: 'py', javascript: 'js', c: 'c' };
-  const ext = extMap[activeCodeLang] || 'txt';
+  const ext = STARTER_EXT[activeCodeLang] || 'txt';
   const container = document.getElementById('starterFilesContainer');
+  if (container.children.length >= STARTER_MAX_FILES) {
+    showToast(`At most ${STARTER_MAX_FILES} starter files per language.`, 'error');
+    return;
+  }
   const idx = container.children.length;
   container.appendChild(createFileCard({ filename: 'file' + (idx + 1) + '.' + ext, content: '' }, idx));
 }
+
+/** Add uploaded files as starter files of the current language (same name: replaced). */
+async function uploadStarterFiles(fileList) {
+  if (!activeCodeLang) {
+    showToast('Pick a language first (Allowed Languages).', 'error');
+    return;
+  }
+  saveCurrentFiles();
+  const files = starterCodeStore[activeCodeLang] || [];
+  // The default empty main file is replaced by the upload rather than kept next to it
+  const untouched = files.length === 1 && !files[0].content.trim();
+  if (untouched) files.length = 0;
+  const added = [], skipped = [];
+  for (const f of Array.from(fileList)) {
+    const name = f.name.replace(/\s+/g, '_').replace(/[^A-Za-z0-9_.-]/g, '');
+    if (starterNameProblem(name)) { skipped.push(`${f.name} (file name)`); continue; }
+    if (f.size > STARTER_MAX_BYTES) { skipped.push(`${f.name} (over 100 KB)`); continue; }
+    let text;
+    try { text = await f.text(); } catch (e) { skipped.push(`${f.name} (could not read)`); continue; }
+    if (text.includes('\u0000')) { skipped.push(`${f.name} (not a text file)`); continue; }
+    const existing = files.find(x => x.filename === name);
+    if (existing) existing.content = text;
+    else if (files.length >= STARTER_MAX_FILES) { skipped.push(`${f.name} (${STARTER_MAX_FILES} file limit)`); continue; }
+    else files.push({ filename: name, content: text });
+    added.push(name);
+  }
+  if (!files.length && untouched) files.push({ filename: (activeCodeLang === 'java' ? 'Main.' : 'main.') + (STARTER_EXT[activeCodeLang] || 'txt'), content: '' });
+  starterCodeStore[activeCodeLang] = files;
+  renderStarterFiles();
+  if (added.length) showToast(`Added ${added.length} file${added.length > 1 ? 's' : ''}: ${added.join(', ')}`, 'success');
+  if (skipped.length) showToast('Skipped: ' + skipped.join('; '), 'error');
+}
+
+(function wireStarterUpload() {
+  const input = document.getElementById('starterUploadInput');
+  input.addEventListener('change', async () => { await uploadStarterFiles(input.files); input.value = ''; });
+  const wrap = document.getElementById('starterFilesWrap');
+  wrap.addEventListener('dragover', e => {
+    if (!e.dataTransfer || !Array.from(e.dataTransfer.types).includes('Files')) return;
+    e.preventDefault();
+    wrap.classList.add('is-dragover');
+  });
+  wrap.addEventListener('dragleave', e => { if (!wrap.contains(e.relatedTarget)) wrap.classList.remove('is-dragover'); });
+  wrap.addEventListener('drop', e => {
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    wrap.classList.remove('is-dragover');
+    uploadStarterFiles(e.dataTransfer.files);
+  });
+})();
 
 function getSelectedLanguages() {
   return Array.from(document.querySelectorAll('#langChips input:checked')).map(c => c.value);
@@ -1929,7 +2110,7 @@ function buildReview() {
         surveys.push('Post');
       }
     }
-    if (p.recurrent_survey_enabled && (p.recurrent_survey || []).length) surveys.push(`Recurrent (start: ${p.recurrent_survey_start}, every: ${p.recurrent_survey_interval})`);
+    if (p.recurrent_survey_enabled && (p.recurrent_survey || []).length) surveys.push(p.recurrent_survey_side_panel ? 'In-task questions (side panel, answered once)' : `Recurrent (start: ${p.recurrent_survey_start}, every: ${p.recurrent_survey_interval})`);
     const surveyStr = surveys.length ? surveys.join(', ') : '<span style="color:var(--muted)">No surveys</span>';
     return `<div style="margin-bottom:8px;"><span style="color:var(--primary);font-weight:600;">${escHtml(probLabel)}:</span> ${escHtml(stmt)}${stmt.length >= 60 ? '...' : ''}<br><span style="font-size:0.85rem;color:var(--muted);">Surveys: ${surveyStr}</span></div>`;
   }).join('');
@@ -1956,6 +2137,16 @@ async function saveQuiz() {
     }
     if (isProblemStatementEmpty(problemsData[i].problem_statement)) {
       showToast(`Problem ${i+1} requires a problem statement.`, 'error'); return;
+    }
+    // Starter files must be valid in the student workspace
+    for (const [lang, files] of Object.entries(problemsData[i].starter_code || {})) {
+      if (!Array.isArray(files)) continue;
+      const seen = new Set();
+      for (const f of files) {
+        const problem = starterNameProblem(f.filename) || (seen.has(f.filename) ? `"${f.filename}" is listed twice.` : '');
+        if (problem) { showToast(`Problem ${i+1} starter code (${lang}): ${problem}`, 'error'); return; }
+        seen.add(f.filename);
+      }
     }
   }
 

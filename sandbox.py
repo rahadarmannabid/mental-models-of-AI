@@ -142,8 +142,8 @@ def _hook(event, args):
         _deny(event.split(".")[0] if event.startswith(("socket.", "subprocess.", "ctypes.")) else event)
     if event == "open":
         path, mode, flags = (list(args) + [None, None, None])[:3]
-        if isinstance(path, int):
-            return
+        if isinstance(path, int) or path in ("/dev/null", b"/dev/null"):
+            return  # /dev/null is harmless (pytest opens it)
         writing = (isinstance(mode, str) and any(c in mode for c in "wax+")) or (
             isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC))
         if not (_inside(path, (_WORK,)) or (not writing and _inside(path, _READ_ROOTS))):
@@ -367,12 +367,15 @@ def _parse_pip(args: List[str], files: List[Dict[str, str]]) -> Tuple[str, List[
     return sub, flags + reqs
 
 
-async def run_pip(*, key: str, args: List[str], files: List[Dict[str, str]], emit: Emit) -> Dict[str, Any]:
-    """`pip install/uninstall/list/show/freeze` in the session's own package environment."""
+async def run_pip(
+    *, key: str, args: List[str], files: List[Dict[str, str]], emit: Emit, pkg_key: Optional[str] = None
+) -> Dict[str, Any]:
+    """`pip install/uninstall/list/show/freeze` in the session's own package environment.
+    `pkg_key` names that environment when it differs from the run key (the agent runs under its own key)."""
     global _pip_slots
     sub, pip_args = _parse_pip([str(a) for a in (args or [])][:40], files or [])
     _check_rate(key)
-    env_dir = _pkg_env(key)
+    env_dir = _pkg_env(pkg_key or key)
     env_py = os.path.join(env_dir, "bin", "python")
     has_env = os.path.exists(env_py)
     tail: List[str] = []  # end of pip's output, to explain common failures
@@ -723,6 +726,7 @@ async def run_code(
     stdin: Optional["asyncio.Queue[Optional[str]]"] = None,
     compile_only: bool = False,
     batch: bool = False,
+    pkg_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run a program, streaming events through `emit`. `stdin=None` means non-interactive (EOF).
     `compile_only` (C, C++, Java) stops after compiling, like running `gcc` in a terminal.
@@ -782,7 +786,7 @@ async def run_code(
                 fh.write(_PY_BOOT)
             if SANDBOX_UID and os.geteuid() == 0:
                 os.chown(boot, SANDBOX_UID, SANDBOX_GID)
-            python = package_python(key) or sys.executable
+            python = package_python(pkg_key or key) or sys.executable
             argv = [python, "-I", "-u", "-X", "utf8", boot, work, entry, SHIM_DIR]
             await emit({"type": "status", "phase": "running"})
             result = await run.execute(argv, work, memory_mb=LIMITS["python_memory_mb"], cpu=LIMITS["cpu_seconds"],
@@ -855,10 +859,12 @@ def stop(key: str) -> None:
 
 
 async def run_batch(
-    *, key: str, language: str, files: List[Dict[str, str]], entry: Optional[str], stdin: Optional[str] = None
+    *, key: str, language: str, files: List[Dict[str, str]], entry: Optional[str], stdin: Optional[str] = None,
+    pkg_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Non-interactive run that collects output (used by the agent's run_code tool and /execute).
-    `stdin` text, if given, is fed to the program followed by end-of-input."""
+    `stdin` text, if given, is fed to the program followed by end-of-input. `pkg_key` picks the
+    package environment (defaults to `key`)."""
     out: List[str] = []
     err: List[str] = []
 
@@ -873,7 +879,8 @@ async def run_batch(
             queue = asyncio.Queue()
             queue.put_nowait(stdin[: LIMITS["stdin_bytes"]])
             queue.put_nowait(None)
-        res = await run_code(key=key, language=language, files=files, entry=entry, emit=collect, stdin=queue, batch=True)
+        res = await run_code(key=key, language=language, files=files, entry=entry, emit=collect, stdin=queue,
+                             batch=True, pkg_key=pkg_key)
     except RunRejected as e:
         return {"success": False, "output": "", "error": str(e), "execution_time": 0.0}
     error = "".join(err)
@@ -885,6 +892,26 @@ async def run_batch(
         "error": error,
         "execution_time": time.monotonic() - started,
     }
+
+
+async def pip_install_batch(*, key: str, pkg_key: str, packages: List[str],
+                            files: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+    """`pip install <packages>` into `pkg_key`'s environment, collecting the output (the agent's install_package)."""
+    out: List[str] = []
+
+    async def collect(ev: Dict[str, Any]) -> None:
+        if ev["type"] == "output":
+            out.append(ev["data"])
+
+    try:
+        res = await run_pip(key=key, pkg_key=pkg_key, args=["install"] + [str(p) for p in packages],
+                            files=files or [], emit=collect)
+    except RunRejected as e:
+        return {"success": False, "output": str(e)}
+    text = "".join(out)
+    if res.get("message"):
+        text = (text + "\n" + res["message"]).strip()
+    return {"success": res.get("exit_code") == 0 and not res.get("reason"), "output": text}
 
 
 async def serve_websocket(ws: Any, start: Optional[Dict[str, Any]] = None) -> None:

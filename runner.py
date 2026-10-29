@@ -13,6 +13,7 @@ Protocol (WebSocket /run):
              | {"type": "display", "mime", "name", "data" (base64)}
              | {"type": "exit", ...result} | {"type": "rejected", "message"}
 
+POST /pip {"key", "pkg_key", "packages"} installs packages without a terminal (the agent's install_package).
 POST /packages/clear {"key"} deletes a session's installed packages (the app calls it on submit).
 """
 
@@ -53,13 +54,28 @@ class BatchRequest(BaseModel):
     files: List[Dict[str, str]]
     entry: Optional[str] = None
     stdin: Optional[str] = None
+    pkg_key: Optional[str] = None
 
 
 @app.post("/execute")
 async def execute(req: BatchRequest, x_runner_token: Optional[str] = Header(default=None)):
     if not _authorized(x_runner_token):
         raise HTTPException(status_code=403)
-    return await sandbox.run_batch(key=req.key, language=req.language, files=req.files, entry=req.entry, stdin=req.stdin)
+    return await sandbox.run_batch(key=req.key, language=req.language, files=req.files, entry=req.entry,
+                                   stdin=req.stdin, pkg_key=req.pkg_key)
+
+
+class PipRequest(BaseModel):
+    key: str
+    pkg_key: str
+    packages: List[str]
+
+
+@app.post("/pip")
+async def pip_install(req: PipRequest, x_runner_token: Optional[str] = Header(default=None)):
+    if not _authorized(x_runner_token):
+        raise HTTPException(status_code=403)
+    return await sandbox.pip_install_batch(key=req.key, pkg_key=req.pkg_key, packages=req.packages)
 
 
 class ClearPackagesRequest(BaseModel):

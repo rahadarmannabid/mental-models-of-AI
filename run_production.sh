@@ -3,8 +3,9 @@
 # Set REDIS_URL for session sharing across workers.
 set -euo pipefail
 cd "$(dirname "$0")"
-export API_PORT="${API_PORT:-8000}"
-export API_RELOAD="${API_RELOAD:-false}"
+# Koyeb (and most platforms) set PORT; API_PORT overrides it
+export API_PORT="${API_PORT:-${PORT:-8000}}"
+export API_RELOAD=false
 WORKERS="${WEB_CONCURRENCY:-4}"
 exec gunicorn main:app \
   -k uvicorn.workers.UvicornWorker \

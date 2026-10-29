@@ -202,6 +202,10 @@ _DEFAULT_SURVEY_TEMPLATE_FILES = {
     "demographics": Path("surveys/instructor_demographics.json"),
     "post_autocomplete": Path("surveys/instructor_post_autocomplete.json"),
     "post_agent": Path("surveys/instructor_post_agent.json"),
+    # The four autocompletion study tasks (statement, starter files with tests, side-panel questions)
+    "autocomplete_tasks": Path("surveys/default_autocomplete_tasks.json"),
+    # The four coding-agent study tasks (same format; Task 1 adds the diagram question to the condition 3 post-survey)
+    "agent_tasks": Path("surveys/default_agent_tasks.json"),
 }
 
 # Per-quiz survey question images (uploaded by instructor); served via GET /quiz-images/{asset_id}/{filename}
@@ -306,9 +310,21 @@ def _get_firebase():
     return firebase_db
 
 
+# How long an OTP login lasts on one browser before a new code is needed
+INSTRUCTOR_LOGIN_HOURS = int(os.getenv("INSTRUCTOR_LOGIN_HOURS", "24"))
+
+
 def _require_instructor(request: Request):
-    """Return instructor email from session or None."""
-    return request.session.get("instructor_email") if request.session.get("is_instructor") else None
+    """Return instructor email from session or None (also when the login is older than INSTRUCTOR_LOGIN_HOURS)."""
+    if not request.session.get("is_instructor"):
+        return None
+    login_at = request.session.get("instructor_login_at")
+    # Sessions from before the login time was recorded count as expired
+    if not isinstance(login_at, (int, float)) or time.time() - login_at > INSTRUCTOR_LOGIN_HOURS * 3600:
+        for k in ("instructor_email", "is_instructor", "instructor_login_at"):
+            request.session.pop(k, None)
+        return None
+    return request.session.get("instructor_email")
 
 
 def _clean_agent_skills(raw: Any) -> List[Dict[str, str]]:
@@ -393,10 +409,14 @@ def _normalize_quiz_data(quiz_data: dict) -> dict:
 
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
+    # Still signed in on this browser (within INSTRUCTOR_LOGIN_HOURS): no new OTP needed
+    if _require_instructor(request):
+        return RedirectResponse(url="/instructor/dashboard", status_code=303)
     error = request.query_params.get("error")
     return templates.TemplateResponse("instructor_login.html", {
         "request": request,
         "error": error,
+        "login_hours": INSTRUCTOR_LOGIN_HOURS,
     })
 
 
@@ -471,6 +491,7 @@ async def verify_otp(request: Request):
         delete_otp(_get_firebase(), email)
         request.session["instructor_email"] = email
         request.session["is_instructor"] = True
+        request.session["instructor_login_at"] = int(time.time())
 
         # Ensure instructor record exists in Firebase
         fb = _get_firebase()

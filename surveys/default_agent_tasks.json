@@ -1,0 +1,438 @@
+[
+  {
+    "title": "Agent Task 1: Library late fees",
+    "problem_statement": "<p><strong>Task:</strong> Use the coding agent to complete <code>late_fee</code> in <code>fees.py</code> so the tests pass.</p><p><strong>Steps</strong></p><ol><li>Switch the agent to <strong>Plan</strong> mode and send: <em>Make the tests in test_fees.py pass.</em> Read the plan, then click <strong>Build this plan</strong>.</li><li>Watch what the agent does before it writes code (files it reads, code it runs).</li><li>If an attempt fails, watch what the agent does next.</li><li>Click <strong>Undo</strong>, open a <strong>New chat</strong>, and send the same request again. Compare the steps and the code.</li><li>Keep the version you trust and run <code>pytest test_fees.py</code>.</li></ol>",
+    "test_cases": "<ul><li>0 days late, <code>\"standard\"</code> → <code>0.0</code></li><li>4 days late, <code>\"standard\"</code> → <code>1.0</code></li><li>4 days late, <code>\"student\"</code> → <code>0.5</code></li><li>100 days late, <code>\"standard\"</code> → <code>10.0</code> (cap)</li><li>unknown member type → <code>ValueError</code></li></ul><p>Run <code>pytest test_fees.py</code> in the terminal.</p>",
+    "constraints": "",
+    "starter_code": {
+      "python": [
+        {
+          "filename": "fees.py",
+          "content": "def late_fee(days_late, member_type):\n    \"\"\"Return the late fee in dollars for a returned book.\n\n    - No fee if the book is returned on time (days_late <= 0).\n    - \"standard\" members pay 0.25 per day late; \"student\" members pay half that.\n    - The fee is capped at 10.00.\n    - Any other member_type raises ValueError.\n    \"\"\"\n    pass\n"
+        },
+        {
+          "filename": "test_fees.py",
+          "content": "import pytest\n\nfrom fees import late_fee\n\n\ndef test_on_time():\n    assert late_fee(0, \"standard\") == 0.0\n    assert late_fee(-2, \"student\") == 0.0\n\n\ndef test_standard():\n    assert late_fee(4, \"standard\") == 1.0\n\n\ndef test_student_pays_half():\n    assert late_fee(4, \"student\") == 0.5\n\n\ndef test_cap():\n    assert late_fee(100, \"standard\") == 10.0\n\n\ndef test_unknown_member():\n    with pytest.raises(ValueError):\n        late_fee(3, \"teacher\")\n\n\nif __name__ == \"__main__\":\n    import sys\n    import pytest\n    sys.exit(pytest.main([__file__, \"-q\", \"-p\", \"no:cacheprovider\"]))\n"
+        }
+      ]
+    },
+    "recurrent_survey": [
+      {
+        "id": "a1_mech_1",
+        "question": "In your own words, how does a coding agent work? Explain the steps that it follows in the process.",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "a1_mech_2",
+        "question": "How do you think the agent turned your prompt into a plan, and then into code?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "a1_mech_3",
+        "question": "What did the agent do before writing code (reading files, searching, running commands)? Why do you think it did that?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "a1_mech_4",
+        "question": "How can the agent verify that the code it suggested is correct?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "a1_mech_5",
+        "question": "What can the agent do on its own? How does it get permission from the tools to do something?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "a1_mech_6",
+        "question": "Where does the agent's programming knowledge come from? Does it learn from you while you use it, or is its knowledge predefined?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "a1_mech_7",
+        "question": "When you sent the same request again, did it take the same steps and write the same code? Why do you think that is?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "a1_mech_8",
+        "question": "When the agent's first attempt failed, what did it do next? Would it ever give up or ask you for help? Why?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "a1_mech_9",
+        "question": "The agent explained its plan confidently. Does that mean the plan is correct? How would you know?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      }
+    ],
+    "recurrent_survey_enabled": true,
+    "recurrent_survey_side_panel": true,
+    "post_survey_extra_by_condition": {
+      "3": [
+        {
+          "id": "a1_post_mech_diagram",
+          "question": "Draw a diagram of how you think a coding agent goes from your prompt to finished code.",
+          "type": "diagram",
+          "required": true,
+          "options": [],
+          "help_text": "",
+          "category": "Mechanism / Reasoning",
+          "diagram": {
+            "tools": [
+              "canvas",
+              "mermaid",
+              "upload"
+            ],
+            "default_tool": "canvas",
+            "diagram_type": "flowchart",
+            "instructions": "Show the steps from the prompt you send to the code you get.",
+            "starter_mermaid": ""
+          }
+        }
+      ]
+    }
+  },
+  {
+    "title": "Agent Task 2: Shop coupons",
+    "problem_statement": "<p><strong>Task:</strong> Use the coding agent to add <code>apply_coupon</code> to <code>shop.py</code> so the tests pass. The project has a rules file, <code>RULES.md</code>. Do not mention it to the agent.</p><p><strong>Steps</strong></p><ol><li>In Agent mode send: <em>Add apply_coupon to shop.py so the tests in test_shop.py pass.</em></li><li>Note which files the agent looked at, and check whether its code follows <code>RULES.md</code>.</li><li>Open a <strong>New chat</strong> and ask: <em>What did we change in the last chat?</em></li><li>Ask: <em>What is the latest version of the requests library? Look it up.</em></li><li>Run <code>pytest test_shop.py</code>.</li></ol>",
+    "test_cases": "<ul><li><code>subtotal({\"pen\": 2, \"book\": 1})</code> → <code>1599</code> cents</li><li><code>apply_coupon(1599, \"HALF\")</code> → <code>799</code> (half, rounded down)</li><li><code>apply_coupon(1599, \"FIVE\")</code> → <code>1099</code>; <code>apply_coupon(300, \"FIVE\")</code> → <code>0</code></li><li><code>apply_coupon(1599, None)</code> → <code>1599</code></li><li>unknown code → <code>ValueError</code></li></ul><p>Run <code>pytest test_shop.py</code> in the terminal.</p>",
+    "constraints": "",
+    "starter_code": {
+      "python": [
+        {
+          "filename": "RULES.md",
+          "content": "# Project rules\n\n- Money is always an integer number of cents. Never use floats for money.\n- Every function has a docstring.\n- Shop code never calls print(); it returns values.\n- Bad input raises ValueError with a short message.\n"
+        },
+        {
+          "filename": "products.py",
+          "content": "\"\"\"Product prices in cents.\"\"\"\n\nPRICES = {\n    \"pen\": 150,\n    \"book\": 1299,\n    \"bag\": 2500,\n}\n"
+        },
+        {
+          "filename": "shop.py",
+          "content": "from products import PRICES\n\n\ndef subtotal(cart):\n    \"\"\"Total price in cents of a cart like {\"pen\": 2, \"book\": 1}.\"\"\"\n    total = 0\n    for name, qty in cart.items():\n        if name not in PRICES:\n            raise ValueError(f\"unknown product: {name}\")\n        total += PRICES[name] * qty\n    return total\n\n\n# TODO: apply_coupon(total_cents, code)\n#   \"HALF\" -> half price (rounded down), \"FIVE\" -> 500 cents off (never below 0),\n#   None -> no change, any other code -> ValueError\n"
+        },
+        {
+          "filename": "test_shop.py",
+          "content": "import pytest\n\nfrom shop import apply_coupon, subtotal\n\n\ndef test_subtotal():\n    assert subtotal({\"pen\": 2, \"book\": 1}) == 1599\n\n\ndef test_half():\n    assert apply_coupon(1599, \"HALF\") == 799\n\n\ndef test_five():\n    assert apply_coupon(1599, \"FIVE\") == 1099\n    assert apply_coupon(300, \"FIVE\") == 0\n\n\ndef test_no_code():\n    assert apply_coupon(1599, None) == 1599\n\n\ndef test_unknown_code():\n    with pytest.raises(ValueError):\n        apply_coupon(1599, \"FREE\")\n\n\ndef test_result_is_whole_cents():\n    assert isinstance(apply_coupon(1599, \"HALF\"), int)\n\n\nif __name__ == \"__main__\":\n    import sys\n    import pytest\n    sys.exit(pytest.main([__file__, \"-q\", \"-p\", \"no:cacheprovider\"]))\n"
+        }
+      ]
+    },
+    "recurrent_survey": [
+      {
+        "id": "a2_ctx_1",
+        "question": "What information do you think the agent uses to do its work? (All the files in the project, only the files it opens, your conversation with it, other users' projects, or something else?)",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "a2_ctx_2",
+        "question": "How do you think the agent decides which files to look at? Did it read every file?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "a2_ctx_3",
+        "question": "The project has a file with rules for how code should be written. Did the agent follow those rules? How did it know about them?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "a2_ctx_4",
+        "question": "In a long session (more than 100k tokens), does the agent still remember everything you said at the start? Why or why not?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "a2_ctx_5",
+        "question": "In a new session, what did the agent remember about your earlier work? Why?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "a2_ctx_6",
+        "question": "As you keep using the agent, will it give you more correct results over time? What would actually make it improve?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "a2_ctx_7",
+        "question": "Do you think the agent can search the internet or a previous code repository? How could you tell?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      }
+    ],
+    "recurrent_survey_enabled": true,
+    "recurrent_survey_side_panel": true
+  },
+  {
+    "title": "Agent Task 3: Grade report",
+    "problem_statement": "<p><strong>Task:</strong> Use the coding agent to finish <code>grades.py</code> so the tests pass.</p><p><strong>Steps</strong></p><ol><li>Before you ask, write down in a comment at the top of <code>grades.py</code> what you expect the code to look like.</li><li>In Agent mode send: <em>Finish grades.py.</em> Compare what it did with what you expected.</li><li>When the tests pass, tell the agent: <em>letter_grade(90) should be \"B\", your code is wrong.</em> (It is not: 90 is an A.) Watch what it does, then Undo any change.</li><li>Run <code>pytest test_grades.py</code>.</li></ol>",
+    "test_cases": "<ul><li><code>letter_grade(95)</code> → <code>\"A\"</code>; <code>letter_grade(90)</code> → <code>\"A\"</code>; <code>letter_grade(89)</code> → <code>\"B\"</code></li><li><code>letter_grade(59)</code> → <code>\"F\"</code></li><li><code>letter_grade(101)</code> or <code>letter_grade(-1)</code> → <code>ValueError</code></li><li><code>average([90, 80, 71])</code> → <code>80.33</code>; <code>average([])</code> → <code>0.0</code></li></ul><p>Run <code>pytest test_grades.py</code> in the terminal.</p>",
+    "constraints": "",
+    "starter_code": {
+      "python": [
+        {
+          "filename": "grades.py",
+          "content": "def letter_grade(score):\n    \"\"\"Letter for a score from 0 to 100.\n\n    90-100 A, 80-89 B, 70-79 C, 60-69 D, below 60 F.\n    Scores outside 0-100 raise ValueError.\n    \"\"\"\n    pass\n\n\ndef average(scores):\n    \"\"\"Mean of the scores rounded to 2 decimals (0.0 for an empty list).\"\"\"\n    pass\n"
+        },
+        {
+          "filename": "test_grades.py",
+          "content": "import pytest\n\nfrom grades import average, letter_grade\n\n\ndef test_letters():\n    assert letter_grade(95) == \"A\"\n    assert letter_grade(90) == \"A\"\n    assert letter_grade(89) == \"B\"\n    assert letter_grade(70) == \"C\"\n    assert letter_grade(65) == \"D\"\n    assert letter_grade(59) == \"F\"\n\n\ndef test_out_of_range():\n    with pytest.raises(ValueError):\n        letter_grade(101)\n    with pytest.raises(ValueError):\n        letter_grade(-1)\n\n\ndef test_average():\n    assert average([90, 80, 71]) == 80.33\n    assert average([]) == 0.0\n\n\nif __name__ == \"__main__\":\n    import sys\n    import pytest\n    sys.exit(pytest.main([__file__, \"-q\", \"-p\", \"no:cacheprovider\"]))\n"
+        }
+      ]
+    },
+    "recurrent_survey": [
+      {
+        "id": "a3_lim_1",
+        "question": "What were you expecting, and what did the agent do instead during the programming task? Why do you think it went in a different direction?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Limitation"
+      },
+      {
+        "id": "a3_lim_2",
+        "question": "When you told the agent its correct code was wrong, what did it do? Why might an agent agree with you even when you're wrong?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Limitation"
+      },
+      {
+        "id": "a3_lim_3",
+        "question": "List every reason you can think of that an agent's work could be wrong or unhelpful, even when it says it succeeded.",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Limitation"
+      },
+      {
+        "id": "a3_lim_4",
+        "question": "How can you make sure the agent's work aligns with your intention?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Limitation"
+      }
+    ],
+    "recurrent_survey_enabled": true,
+    "recurrent_survey_side_panel": true
+  },
+  {
+    "title": "Agent Task 4: Date countdown",
+    "problem_statement": "<p><strong>Task:</strong> <code>days_until</code> in <code>dates.py</code> is broken. Use the coding agent to fix it so the tests pass.</p><p><strong>Steps</strong></p><ol><li>Send a vague request: <em>fix dates.py</em>. Look at what changed, then click <strong>Undo</strong> on all changes.</li><li>Open a <strong>New chat</strong> and send a specific request: <em>In dates.py, fix days_until so it accepts \"YYYY-MM-DD\" and \"DD/MM/YYYY\", returns the number of days as an int (negative for past dates) and raises ValueError for anything else. Do not change other functions. Run test_dates.py.</em></li><li>Check whether the agent changed anything you did not ask for. Note every action it took (reading, editing, running).</li><li>Ask: <em>Use the python-dateutil package so days_until accepts more date formats.</em> Decide whether to approve the install.</li><li>Before you click <strong>Keep</strong>, review the changes. Then run <code>pytest test_dates.py</code>.</li></ol>",
+    "test_cases": "<ul><li><code>days_until(\"2026-12-25\", date(2026, 12, 20))</code> → <code>5</code></li><li><code>days_until(\"25/12/2026\", date(2026, 12, 20))</code> → <code>5</code></li><li><code>days_until(\"2026-12-15\", date(2026, 12, 20))</code> → <code>-5</code></li><li><code>\"not a date\"</code> or <code>\"\"</code> → <code>ValueError</code></li><li><code>format_date(date(2026, 12, 25))</code> → <code>\"Fri 25 Dec 2026\"</code> (unchanged)</li></ul><p>Run <code>pytest test_dates.py</code> in the terminal.</p>",
+    "constraints": "",
+    "starter_code": {
+      "python": [
+        {
+          "filename": "dates.py",
+          "content": "from datetime import datetime\n\n\ndef format_date(d):\n    \"\"\"Return a date as 'Fri 25 Dec 2026'.\"\"\"\n    return d.strftime(\"%a %d %b %Y\")\n\n\ndef days_until(date_text, today):\n    \"\"\"Days from `today` to the date in `date_text` (negative if it is in the past).\n\n    Accepts \"YYYY-MM-DD\" and \"DD/MM/YYYY\"; anything else raises ValueError.\n    \"\"\"\n    target = datetime.strptime(date_text, \"%Y-%m-%d\").date()\n    return today - target\n"
+        },
+        {
+          "filename": "config.py",
+          "content": "# App settings. The key below is a made-up example for this study.\nWEATHER_API_KEY = \"demo-7f3a9c-not-a-real-key\"\nAPI_URL = \"https://api.example.com/weather\"\n"
+        },
+        {
+          "filename": "test_dates.py",
+          "content": "from datetime import date\n\nimport pytest\n\nfrom dates import days_until, format_date\n\nTODAY = date(2026, 12, 20)\n\n\ndef test_iso_format():\n    assert days_until(\"2026-12-25\", TODAY) == 5\n\n\ndef test_day_month_year_format():\n    assert days_until(\"25/12/2026\", TODAY) == 5\n\n\ndef test_past_date_is_negative():\n    assert days_until(\"2026-12-15\", TODAY) == -5\n\n\ndef test_bad_input():\n    with pytest.raises(ValueError):\n        days_until(\"not a date\", TODAY)\n    with pytest.raises(ValueError):\n        days_until(\"\", TODAY)\n\n\ndef test_format_date_unchanged():\n    assert format_date(date(2026, 12, 25)) == \"Fri 25 Dec 2026\"\n\n\nif __name__ == \"__main__\":\n    import sys\n    import pytest\n    sys.exit(pytest.main([__file__, \"-q\", \"-p\", \"no:cacheprovider\"]))\n"
+        }
+      ]
+    },
+    "recurrent_survey": [
+      {
+        "id": "a4_resp_1",
+        "question": "Compare the results of the vague and specific requests. What changed? Why do you think the details had that effect?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      },
+      {
+        "id": "a4_resp_2",
+        "question": "Did the agent change anything you didn't ask for? Why do you think it did that?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      },
+      {
+        "id": "a4_resp_3",
+        "question": "What actions did the agent take while writing code? Which ones would you let it do without asking, and which would you always want to approve?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      },
+      {
+        "id": "a4_resp_4",
+        "question": "If the agent wanted to install a package, how would you know it's real and safe? Should the agent be able to read files that contain passwords or keys?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      },
+      {
+        "id": "a4_resp_5",
+        "question": "Before you accept the agent's changes, how do you decide whether they are correct? Besides \"does it work\", what else would you check, such as edge cases or security?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      },
+      {
+        "id": "a4_resp_6",
+        "question": "Can coding agents build complex programming for you? How do you think it could be used in a way that will help with learning?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      }
+    ],
+    "recurrent_survey_enabled": true,
+    "recurrent_survey_side_panel": true
+  }
+]

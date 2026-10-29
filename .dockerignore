@@ -73,6 +73,8 @@ desktop.ini
 # ============================================
 docker-compose*.yml
 .dockerignore
+build-and-push.sh
+start.sh
 
 # ============================================
 # DOCUMENTATION
@@ -184,3 +186,10 @@ yarn.lock
 # ✅ requirements.txt
 # Firebase service account keys (secret)
 *firebase-adminsdk*.json
+
+# Local-only tooling and data
+scripts/
+.claude/
+.cursor/
+pyrightconfig.json
+ruff.toml

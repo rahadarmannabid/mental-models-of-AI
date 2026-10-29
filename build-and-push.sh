@@ -1,122 +1,89 @@
 #!/usr/bin/env bash
-# Docker image: local build OR multi-arch push (Koyeb / registry).
-# Run from repo root: ./build-and-push.sh
+# Build the production image and push it to Docker Hub, for Koyeb.
+# Run from the repo root:
+#   ./build-and-push.sh              build linux/amd64 (Koyeb), push :<version> and :latest
+#   ./build-and-push.sh v1.2.0       same, with your own version tag
+#   ./build-and-push.sh local        build for this machine only and smoke-test it (no push)
+#
+# Environment:
+#   DOCKER_REPO              image name (default rahadarmannabid/mental-model-of-ai)
+#   DOCKER_PLATFORMS         default linux/amd64 (what Koyeb runs); e.g. linux/amd64,linux/arm64
+#   DOCKER_BUILD_NO_CACHE=1  rebuild every layer
 set -euo pipefail
+cd "$(dirname "$0")"
 
-DOCKER_REPO="${DOCKER_REPO:-rahadarmannabid/codeoracle}"
-# Default: both architectures. Koyeb often runs linux/amd64 — an arm64-only image fails there.
-# Faster local multi-arch push: DOCKER_PLATFORMS=linux/amd64 ./build-and-push.sh v1.0.0
-DOCKER_PLATFORMS="${DOCKER_PLATFORMS:-linux/amd64,linux/arm64}"
-BUILDER_NAME="${BUILDX_BUILDER:-codeoracle-multiarch}"
-# Set to 1 to force a clean dependency layer: DOCKER_BUILD_NO_CACHE=1 ./build-and-push.sh local
-DOCKER_BUILD_NO_CACHE="${DOCKER_BUILD_NO_CACHE:-0}"
+DOCKER_REPO="${DOCKER_REPO:-rahadarmannabid/mental-model-of-ai}"
+DOCKER_PLATFORMS="${DOCKER_PLATFORMS:-linux/amd64}"
+BUILDER_NAME="${BUILDX_BUILDER:-mental-model-builder}"
+NO_CACHE=()
+[ "${DOCKER_BUILD_NO_CACHE:-0}" = "1" ] && NO_CACHE=(--no-cache)
 
-usage() {
-    cat <<'EOF'
+info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+die()  { printf '\033[1;31mxx \033[0m %s\n' "$*" >&2; exit 1; }
 
-Usage:
-  ./build-and-push.sh local [tag]
-      Build on this machine only (plain docker build, no registry push).
-      Default tag: latest. Example: ./build-and-push.sh local dev
+case "${1:-}" in -h|--help) sed -n '2,13p' "$0"; exit 0 ;; esac
 
-  ./build-and-push.sh [version]
-      Multi-arch buildx build + push to DOCKER_REPO.
-      If version is omitted, uses vYYYYMMDD-HHMMSS.
+command -v docker >/dev/null || die "docker not found. Install Docker Desktop."
+docker info >/dev/null 2>&1 || die "Docker is not running. Start Docker Desktop and try again."
+[ -f Dockerfile ] || die "Dockerfile not found (run from the repo root)."
+# The image must never contain secrets (.dockerignore excludes them; the Dockerfile checks too)
+grep -qx '.env' .dockerignore || die ".dockerignore must exclude .env"
 
-Environment:
-  DOCKER_REPO              Image name (default: rahadarmannabid/codeoracle)
-  DOCKER_PLATFORMS         e.g. linux/amd64 for faster push
-  DOCKER_BUILD_NO_CACHE=1  Full rebuild without cache (local or push)
-  BUILDX_BUILDER           buildx builder name (default: codeoracle-multiarch)
-
-Examples:
-  ./build-and-push.sh local
-  DOCKER_BUILD_NO_CACHE=1 ./build-and-push.sh local
-  ./build-and-push.sh v1.2.3
-  DOCKER_PLATFORMS=linux/amd64 ./build-and-push.sh
-EOF
-}
-
-if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-    usage
-    exit 0
-fi
-
-# ─── Local build (this machine only, no push) ─────────────────────────────
-# Note: avoid empty ${arr[@]} with set -u (macOS bash 3.2 errors) — branch on --no-cache instead.
+# ─── Local build + smoke test (no push) ─────────────────────────────────────
 if [ "${1:-}" = "local" ]; then
-    TAG="${2:-latest}"
-    echo "=========================================="
-    echo "Local Docker build (current architecture)"
-    echo "Repository: $DOCKER_REPO"
-    echo "Tag:        $TAG"
-    echo "=========================================="
-    if [ "$DOCKER_BUILD_NO_CACHE" = "1" ]; then
-        docker build --no-cache -f Dockerfile \
-            -t "${DOCKER_REPO}:${TAG}" \
-            -t "${DOCKER_REPO}:latest" \
-            .
+    TAG="${DOCKER_REPO}:local"
+    info "Building $TAG for this machine"
+    docker build "${NO_CACHE[@]+"${NO_CACHE[@]}"}" -t "$TAG" .
+
+    info "Smoke test: starting the container on port 18000"
+    name="mental-model-smoke-$$"
+    env_args=()
+    [ -f .env ] && env_args=(--env-file .env)
+    docker run -d --name "$name" -p 18000:8000 "${env_args[@]+"${env_args[@]}"}" -e API_PORT=8000 -e PORT=8000 "$TAG" >/dev/null
+    trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
+    for _ in $(seq 1 60); do
+        curl -fsS http://127.0.0.1:18000/health >/dev/null 2>&1 && break
+        sleep 2
+    done
+    if curl -fsS http://127.0.0.1:18000/health >/dev/null 2>&1; then
+        info "Health check OK: $(curl -fsS http://127.0.0.1:18000/health)"
+        info "Image works. To push for Koyeb: ./build-and-push.sh"
     else
-        docker build -f Dockerfile \
-            -t "${DOCKER_REPO}:${TAG}" \
-            -t "${DOCKER_REPO}:latest" \
-            .
+        docker logs "$name" 2>&1 | tail -40
+        die "The container did not become healthy (logs above)."
     fi
-    echo ""
-    echo "✅ Image: ${DOCKER_REPO}:${TAG} (also tagged :latest)"
-    echo "   Run:   docker run --rm -p 9000:8000 --env-file .env ${DOCKER_REPO}:${TAG}"
-    echo "=========================================="
     exit 0
 fi
 
-# ─── Multi-arch build + push ────────────────────────────────────────────────
-if [ -z "${1:-}" ]; then
-    VERSION="v$(date +%Y%m%d-%H%M%S)"
-    echo "No version specified, using: $VERSION"
-else
-    VERSION="$1"
+# ─── Build for Koyeb + push to Docker Hub ───────────────────────────────────
+VERSION="${1:-v$(date +%Y%m%d-%H%M%S)-$(git rev-parse --short HEAD 2>/dev/null || echo nogit)}"
+
+if ! grep -q 'index.docker.io' "$HOME/.docker/config.json" 2>/dev/null; then
+    info "Log in to Docker Hub (account rahadarmannabid)"
+    docker login
 fi
 
-echo "=========================================="
-echo "Multi-arch build + push (docker buildx)"
-echo "Repository: $DOCKER_REPO"
-echo "Version:    $VERSION"
-echo "Platforms:  $DOCKER_PLATFORMS"
-echo "=========================================="
-
-if ! docker buildx version >/dev/null 2>&1; then
-    echo "❌ docker buildx not found. Install Docker Buildx or use Docker Desktop."
-    exit 1
-fi
-
+docker buildx version >/dev/null 2>&1 || die "docker buildx not found (it comes with Docker Desktop)."
 if ! docker buildx inspect "$BUILDER_NAME" >/dev/null 2>&1; then
-    echo "Creating buildx builder: $BUILDER_NAME"
-    docker buildx create --name "$BUILDER_NAME" --driver docker-container --bootstrap
-fi
-docker buildx use "$BUILDER_NAME"
-
-echo "Log in if needed: docker login"
-echo "Building and pushing manifest (per-arch layers + combined tag)..."
-if [ "$DOCKER_BUILD_NO_CACHE" = "1" ]; then
-    docker buildx build --no-cache \
-        --platform "$DOCKER_PLATFORMS" \
-        -f Dockerfile \
-        -t "${DOCKER_REPO}:${VERSION}" \
-        -t "${DOCKER_REPO}:latest" \
-        --push \
-        .
-else
-    docker buildx build \
-        --platform "$DOCKER_PLATFORMS" \
-        -f Dockerfile \
-        -t "${DOCKER_REPO}:${VERSION}" \
-        -t "${DOCKER_REPO}:latest" \
-        --push \
-        .
+    info "Creating buildx builder $BUILDER_NAME"
+    docker buildx create --name "$BUILDER_NAME" --driver docker-container --bootstrap >/dev/null
 fi
 
-echo ""
-echo "✅ Done. Image supports: $DOCKER_PLATFORMS"
-echo "   docker pull ${DOCKER_REPO}:latest"
-echo "   (Runners pick amd64 or arm64 automatically.)"
-echo "=========================================="
+info "Building $DOCKER_REPO:$VERSION for $DOCKER_PLATFORMS and pushing (also :latest)"
+docker buildx build --builder "$BUILDER_NAME" "${NO_CACHE[@]+"${NO_CACHE[@]}"}" \
+    --platform "$DOCKER_PLATFORMS" \
+    -t "$DOCKER_REPO:$VERSION" \
+    -t "$DOCKER_REPO:latest" \
+    --push \
+    .
+
+cat <<EOF
+
+✅ Pushed $DOCKER_REPO:$VERSION and :latest ($DOCKER_PLATFORMS)
+
+Koyeb (first time): Create Service → Docker image → $DOCKER_REPO:latest
+  - Exposed port 8000 (HTTP, route /); health check: HTTP GET /health on port 8000
+  - Instance with at least 2 GB RAM (4 workers + code runner), or set WEB_CONCURRENCY=2 on 1 GB
+  - Environment variables: copy them from your .env (secrets as Koyeb Secrets), see DOCKER.md
+Koyeb (update): Service → Redeploy (it pulls :latest again), or deploy the tag $VERSION.
+EOF

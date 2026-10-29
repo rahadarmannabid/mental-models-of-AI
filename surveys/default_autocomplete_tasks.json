@@ -1,0 +1,302 @@
+[
+  {
+    "title": "Task 1: Cart total",
+    "problem_statement": "<p><strong>Task:</strong> Complete <code>cart_total</code>. Total = price × qty; <code>\"SAVE10\"</code> = 10% off; round to 2 decimals.</p><p><strong>Steps</strong></p><ol><li>Accept the suggestion. Run <code>pytest test_cart.py</code>.</li><li>Delete the last line and retrigger three times. Same each time?</li><li>Change “dollars” to “cents” and retrigger.</li></ol>",
+    "test_cases": "<ul><li><code>[]</code>, code <code>None</code> → <code>0.0</code></li><li>4 × pen @ 1.50, code <code>None</code> → <code>6.0</code></li><li>4 × pen @ 1.50 + book @ 12.99, code <code>\"SAVE10\"</code> → <code>17.09</code></li><li>book @ 12.99, code <code>\"save10\"</code> → <code>12.99</code></li></ul><p>Run <code>pytest test_cart.py</code> in the terminal.</p>",
+    "constraints": "",
+    "starter_code": {
+      "python": [
+        {
+          "filename": "cart.py",
+          "content": "def cart_total(items, discount_code=None):\n    \"\"\"Return the cart total in dollars, rounded to 2 decimals.\n    SAVE10 gives 10% off the whole cart.\"\"\"\n    pass\n"
+        },
+        {
+          "filename": "test_cart.py",
+          "content": "from cart import cart_total\n\nPEN = {\"name\": \"pen\", \"price\": 1.50, \"qty\": 4}\nBOOK = {\"name\": \"book\", \"price\": 12.99, \"qty\": 1}\n\n\ndef test_empty_cart():\n    assert cart_total([], None) == 0.0\n\n\ndef test_pens():\n    assert cart_total([PEN], None) == 6.0\n\n\ndef test_save10():\n    assert cart_total([PEN, BOOK], \"SAVE10\") == 17.09\n\n\ndef test_code_is_case_sensitive():\n    assert cart_total([BOOK], \"save10\") == 12.99\n"
+        }
+      ]
+    },
+    "recurrent_survey": [
+      {
+        "id": "t1_mech_relevant",
+        "question": "How do you think the system provides code suggestions that are relevant to your problem? Explain the steps that follow when generating code suggestions.",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "t1_mech_algorithm",
+        "question": "What is the underlying mechanism or algorithm that decides which code suggestions to provide?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "t1_mech_knowledge",
+        "question": "How does the system get all of its programming knowledge? Does it learn while you are using it, or does it already have that knowledge?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "t1_mech_storage",
+        "question": "How does it store the knowledge?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      },
+      {
+        "id": "t1_mech_retrigger",
+        "question": "When you removed a line and got a new code suggestion, was it the same as before? Why do you think that is?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Mechanism / Reasoning"
+      }
+    ],
+    "recurrent_survey_enabled": true,
+    "recurrent_survey_side_panel": true,
+    "post_survey_extra_by_condition": {
+      "2": [
+        {
+          "id": "t1_post_mech_diagram",
+          "question": "Draw a diagram of how the system generates code suggestions.",
+          "type": "diagram",
+          "required": true,
+          "options": [],
+          "help_text": "",
+          "category": "Mechanism / Reasoning",
+          "diagram": {
+            "tools": [
+              "canvas",
+              "mermaid",
+              "upload"
+            ],
+            "default_tool": "canvas",
+            "diagram_type": "flowchart",
+            "instructions": "Show the steps from what you type to the suggestion you see.",
+            "starter_mermaid": ""
+          }
+        }
+      ]
+    }
+  },
+  {
+    "title": "Task 2: Print receipt",
+    "problem_statement": "<p><strong>Task:</strong> Complete <code>print_receipt</code>. One line per product, then a TOTAL line.</p><p><strong>Steps</strong></p><ol><li>With only <code>receipt.py</code> open, trigger a suggestion in <code>print_receipt</code>.</li><li>Open the other two files (<code>formatting.py</code>, <code>models.py</code>) and retrigger. Then uncomment the imports and retrigger.</li><li>Trigger under each bottom comment. Run <code>pytest test_receipt.py</code>.</li></ol>",
+    "test_cases": "<ul><li><code>[]</code> → <code>\"TOTAL USD 0.00\"</code></li><li>Pen 150 → <code>\"Pen USD 1.50\\nTOTAL USD 1.50\"</code></li><li>Pen 150, Book 1299 → <code>\"Pen USD 1.50\\nBook USD 12.99\\nTOTAL USD 14.49\"</code></li><li>Gift card 5 → <code>\"Gift card USD 0.05\\nTOTAL USD 0.05\"</code></li></ul><p>Run <code>pytest test_receipt.py</code> in the terminal.</p>",
+    "constraints": "",
+    "starter_code": {
+      "python": [
+        {
+          "filename": "receipt.py",
+          "content": "# from formatting import fmt_money_x\n# from models import Product\n\ndef print_receipt(products):\n    # <- cursor here\n\n# Get today's exchange rate from the internet\n\n# Use the store's internal discount service\n"
+        },
+        {
+          "filename": "formatting.py",
+          "content": "def fmt_money_x(cents):           # 1250 -> \"USD 12.50\"\n    return f\"USD {cents // 100}.{cents % 100:02d}\"\n"
+        },
+        {
+          "filename": "models.py",
+          "content": "from dataclasses import dataclass\n\n\n@dataclass\nclass Product:\n    title: str\n    price_cents: int\n"
+        },
+        {
+          "filename": "test_receipt.py",
+          "content": "from models import Product\nfrom receipt import print_receipt\n\n\ndef receipt_text(products, capsys):\n    \"\"\"The receipt, whether print_receipt returns it or prints it.\"\"\"\n    result = print_receipt(products)\n    printed = capsys.readouterr().out\n    return (result if isinstance(result, str) else printed).strip()\n\n\ndef test_empty(capsys):\n    assert receipt_text([], capsys) == \"TOTAL USD 0.00\"\n\n\ndef test_one_product(capsys):\n    assert receipt_text([Product(\"Pen\", 150)], capsys) == \"Pen USD 1.50\\nTOTAL USD 1.50\"\n\n\ndef test_two_products(capsys):\n    products = [Product(\"Pen\", 150), Product(\"Book\", 1299)]\n    assert receipt_text(products, capsys) == \"Pen USD 1.50\\nBook USD 12.99\\nTOTAL USD 14.49\"\n\n\ndef test_small_amount(capsys):\n    assert receipt_text([Product(\"Gift card\", 5)], capsys) == \"Gift card USD 0.05\\nTOTAL USD 0.05\"\n"
+        }
+      ]
+    },
+    "recurrent_survey": [
+      {
+        "id": "t2_ctx_information",
+        "question": "What information do you think the tool uses when it suggests code? Does it use all the files in your project, only the files you have open, the code in the editor, other users’ repositories, or something else?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "t2_ctx_how",
+        "question": "How do you think the tool gets this information from you?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "t2_ctx_internet",
+        "question": "Do you think the tool can search the internet? Why or why not?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      },
+      {
+        "id": "t2_ctx_over_time",
+        "question": "As you keep using the tool, do you think it will give you more correct suggestions over time? Why or why not?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Context / Data Literacy"
+      }
+    ],
+    "recurrent_survey_enabled": true,
+    "recurrent_survey_side_panel": true
+  },
+  {
+    "title": "Task 3: Strong password",
+    "problem_statement": "<p><strong>Task:</strong> Complete <code>is_strong_password</code>: 12+ characters, no username (any case), at least 3 of 4 groups (lower, upper, digit, symbol).</p><p><strong>Steps</strong></p><ol><li>Write your plan on paper.</li><li>Accept the suggestion. Run <code>pytest test_password.py</code>.</li><li>Steer the tool until all tests pass.</li></ol>",
+    "test_cases": "<ul><li><code>\"Sunny-Day-2026\"</code>, <code>\"maria\"</code> → <code>True</code></li><li><code>\"Sunny-day-rocks2026\"</code>, <code>\"maria\"</code> → <code>True</code></li><li><code>\"sunnydayrocks2026\"</code>, <code>\"maria\"</code> → <code>False</code></li><li><code>\"SUNNYDAYROCKS!!\"</code>, <code>\"maria\"</code> → <code>False</code></li><li><code>\"Ab1!Ab1!Ab1\"</code>, <code>\"x\"</code> → <code>False</code></li><li><code>\"Maria-2026-Rocks!\"</code>, <code>\"maria\"</code> → <code>False</code></li><li><code>\"\"</code>, <code>\"maria\"</code> → <code>False</code></li></ul><p>Run <code>pytest test_password.py</code> in the terminal.</p>",
+    "constraints": "",
+    "starter_code": {
+      "python": [
+        {
+          "filename": "password.py",
+          "content": "def is_strong_password(password, username):\n    # <- cursor here\n    pass\n"
+        },
+        {
+          "filename": "test_password.py",
+          "content": "import pytest\n\nfrom password import is_strong_password\n\n\n@pytest.mark.parametrize(\"password, username, expected\", [\n    (\"Sunny-Day-2026\", \"maria\", True),\n    (\"Sunny-day-rocks2026\", \"maria\", True),\n    (\"sunnydayrocks2026\", \"maria\", False),\n    (\"SUNNYDAYROCKS!!\", \"maria\", False),\n    (\"Ab1!Ab1!Ab1\", \"x\", False),\n    (\"Maria-2026-Rocks!\", \"maria\", False),\n    (\"\", \"maria\", False),\n])\ndef test_is_strong_password(password, username, expected):\n    assert is_strong_password(password, username) == expected\n"
+        }
+      ]
+    },
+    "recurrent_survey": [
+      {
+        "id": "t3_lim_plan_vs_tool",
+        "question": "What were you planning to write, and what did the tool suggest instead? Why do you think it went in a different direction?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Limitation"
+      },
+      {
+        "id": "t3_lim_reasons",
+        "question": "List every reason you can think of that a suggestion could be wrong or unhelpful, not only in this example.",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Limitation"
+      },
+      {
+        "id": "t3_lim_match_intent",
+        "question": "How can you make sure the system’s suggestions match your intention?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Limitation"
+      }
+    ],
+    "recurrent_survey_enabled": true,
+    "recurrent_survey_side_panel": true
+  },
+  {
+    "title": "Task 4: Average speed",
+    "problem_statement": "<p><strong>Task:</strong> Get a correct speed function by improving only the comment and the function name.</p><p><strong>Steps</strong></p><ol><li>Accept the suggestion. Note what it does.</li><li>Delete the body. Add the comment <code># Return average speed in km/h from distance in meters and time in seconds</code> above the function, then retrigger.</li><li>Delete the body. Rename to <code>average_speed_kmh(distance_m, time_s)</code>, retrigger, and run <code>pytest test_speed.py</code>.</li></ol>",
+    "test_cases": "<ul><li><code>average_speed_kmh(1000, 3600)</code> → <code>1.0</code></li><li><code>average_speed_kmh(100, 10)</code> → <code>36.0</code></li><li><code>average_speed_kmh(0, 10)</code> → <code>0.0</code></li></ul><p>Run <code>pytest test_speed.py</code> in the terminal.</p>",
+    "constraints": "",
+    "starter_code": {
+      "python": [
+        {
+          "filename": "speed.py",
+          "content": "def calc(a, b):\n    # <- cursor here\n    pass\n"
+        },
+        {
+          "filename": "test_speed.py",
+          "content": "import pytest\n\nfrom speed import average_speed_kmh\n\n\n@pytest.mark.parametrize(\"distance_m, time_s, expected\", [\n    (1000, 3600, 1.0),\n    (100, 10, 36.0),\n    (0, 10, 0.0),\n])\ndef test_average_speed_kmh(distance_m, time_s, expected):\n    assert average_speed_kmh(distance_m, time_s) == pytest.approx(expected)\n"
+        }
+      ]
+    },
+    "recurrent_survey": [
+      {
+        "id": "t4_resp_comment",
+        "question": "Compare the suggestions with and without the comment. What changed? Why do you think the comment had that effect?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      },
+      {
+        "id": "t4_resp_names",
+        "question": "What effect do you see when you make the variable names clear?",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      },
+      {
+        "id": "t4_resp_verify",
+        "question": "Before you accept a suggestion, how do you decide whether it is correct? Show me what you would do with this one.",
+        "type": "open_ended",
+        "required": true,
+        "options": [],
+        "help_text": "",
+        "placeholder": "Write your answer...",
+        "min_length": 20,
+        "max_length": 2000,
+        "category": "Responsibility"
+      }
+    ],
+    "recurrent_survey_enabled": true,
+    "recurrent_survey_side_panel": true
+  }
+]
