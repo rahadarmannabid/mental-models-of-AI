@@ -463,6 +463,16 @@
       font-size: 0.7rem;
     }
     .final-code-problem-label { color: #e2e8f0; font-weight: 600; letter-spacing: -0.01em; }
+    .final-code-file-name {
+      padding: 4px 8px;
+      font: 600 0.68rem/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #cbd5e1;
+      background: rgba(30, 41, 59, 0.45);
+      border-top: 1px solid rgba(51, 65, 85, 0.55);
+    }
+    .final-code-zip, .final-code-zip-all { color: #60a5fa; font-size: 0.68rem; font-weight: 600; text-decoration: none; }
+    .final-code-zip:hover, .final-code-zip-all:hover { text-decoration: underline; }
+    .final-code-zip-all { display: inline-block; margin-top: 2px; }
     .final-code-lang-badge {
       color: #93c5fd;
       text-transform: uppercase;
@@ -571,7 +581,6 @@
       {% if firebase_available %}
       <button type="button" class="nav-refresh" id="analytics-refresh-btn" title="Reload submission aggregates from Firebase (bypasses server cache)">Refresh data</button>
       <a class="nav-export" href="/instructor/quiz/{{ quiz_id }}/analytics-export?fmt=csv">Download sessions (CSV)</a>
-      <a class="nav-export" href="/instructor/quiz/{{ quiz_id }}/analytics-export?fmt=json">Download full (JSON)</a>
       {% endif %}
       <a href="/instructor/dashboard">Dashboard</a>
     </div>
@@ -2067,22 +2076,42 @@
             return cleaned || 'text';
           }
 
+          function finalCodeZipUrl(row, problemIndex) {
+            return '/instructor/quiz/' + encodeURIComponent(quizId) + '/final-code-zip?session_id=' +
+              encodeURIComponent(row.session_id) + (problemIndex == null ? '' : '&problem_index=' + problemIndex);
+          }
+
+          // Every file of each problem's final code (an agent may change several), with a zip per problem
           function renderFinalCodeCell(row) {
+            var filesBy = row.final_files_per_problem;
             var codes = row.final_code_per_problem;
             var lang = normalizeLangLabel(row.programming_language);
-            if (!codes || !codes.length) return '—';
+            var n = Math.max((filesBy || []).length, (codes || []).length);
             var blocks = [];
-            for (var i = 0; i < codes.length; i++) {
-              if (codes[i] == null || String(codes[i]).trim() === '') continue;
+            for (var i = 0; i < n; i++) {
+              var files = filesBy && filesBy[i];
+              if (!files || !files.length) {
+                var code = codes && codes[i];
+                if (code == null || String(code).trim() === '') continue;
+                files = [{ filename: '', content: String(code) }];
+              }
               var title = 'P' + (i + 1);
               if (labels && labels[i]) title += ' — ' + String(labels[i]);
+              var body = files.map(function (f) {
+                return (f.filename ? '<div class="final-code-file-name">' + escHtml(f.filename) + '</div>' : '') +
+                  '<pre class="final-code-pre"><code>' + escHtml(String(f.content || '')) + '</code></pre>';
+              }).join('');
+              var zip = row.session_id
+                ? '<a class="final-code-zip" href="' + finalCodeZipUrl(row, i) + '" title="Download this problem\'s files">' +
+                  (files.length > 1 ? files.length + ' files · ' : '') + 'Download .zip</a>'
+                : '';
               blocks.push(
                 '<div class="final-code-block">' +
                   '<div class="final-code-block-meta">' +
                   '<span class="final-code-problem-label">' + escHtml(title) + '</span>' +
+                  zip +
                   '<span class="final-code-lang-badge">' + escHtml(lang) + '</span>' +
-                  '</div>' +
-                  '<pre class="final-code-pre"><code>' + escHtml(String(codes[i])) + '</code></pre>' +
+                  '</div>' + body +
                 '</div>'
               );
             }
@@ -2090,6 +2119,9 @@
             return (
               '<details class="final-code-details">' +
               '<summary>Final code</summary>' +
+              (row.session_id && blocks.length > 1
+                ? '<div><a class="final-code-zip-all" href="' + finalCodeZipUrl(row, null) + '">Download all problems (.zip)</a></div>'
+                : '') +
               '<div class="final-code-stack">' + blocks.join('') + '</div>' +
               '</details>'
             );
@@ -2158,8 +2190,9 @@
               } else {
                 for (var k = 0; k < occs.length; k++) {
                   var occ = occs[k];
-                  out +=
-                    '<div class="survey-occ-label">Occurrence ' + escHtml(String(occ.occurrence_number)) + '</div>';
+                  var occLabel = (typeof occ.problem_index === 'number' ? 'P' + (occ.problem_index + 1) + ' · ' : '') +
+                    'Occurrence ' + occ.occurrence_number;
+                  out += '<div class="survey-occ-label">' + escHtml(occLabel) + '</div>';
                   out += surveyQaTableHtml(occ.qa || [], row.session_id);
                 }
               }

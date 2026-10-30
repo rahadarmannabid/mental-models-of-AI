@@ -896,11 +896,19 @@
                 build.type = 'button';
                 build.className = 'agent-btn agent-btn--primary agent-build';
                 build.innerHTML = SVG.agent + ' Build this plan';
-                build.addEventListener('click', function () {
+                build.title = 'Accept this plan and let the agent make the changes';
+                build.addEventListener('click', async function () {
+                    if (self.busy) return;
                     build.remove();
                     log('agent_plan_build', { turn_id: turnId });
                     self.setMode('agent', true);
-                    self.send('Implement the plan above.');
+                    await self.send('Implement the plan above.');
+                    // Building is one Agent turn; the chat goes back to Plan so later messages only plan again
+                    if (self.mode === 'agent') {
+                        self.setMode('plan', true);
+                        self.addStep(self.newTurn(), SVG.plan, 'Back in Plan mode: review the changes above (Keep / Undo).', 'agent-step--muted');
+                        self.scroll();
+                    }
                 });
                 turn.appendChild(build);
                 this.scroll();

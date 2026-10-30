@@ -4,11 +4,20 @@
 #
 # Usage:  ./start.sh            (production: gunicorn, multiple workers)
 #         ./start.sh --dev      (single uvicorn process with auto-reload)
+#         ./start.sh --https    (serve https:// so other computers on the network can use
+#                                voice answers; combine with --dev if needed)
 set -euo pipefail
 cd "$(dirname "$0")"
 
 MODE="prod"
-[[ "${1:-}" == "--dev" ]] && MODE="dev"
+HTTPS=0
+for arg in "$@"; do
+  case "$arg" in
+    --dev) MODE="dev" ;;
+    --https) HTTPS=1 ;;
+    *) printf 'Unknown option: %s\n' "$arg" >&2; exit 1 ;;
+  esac
+done
 
 info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m!! \033[0m %s\n' "$*"; }
@@ -101,13 +110,45 @@ done
 export API_PORT
 
 # ---------------------------------------------------------------------------
+# HTTPS (--https): browsers only allow the microphone (voice answers) on https://
+# pages or on localhost, so students on other computers need https://<this IP>.
+# A self-signed certificate for localhost + this machine's IPs is made in certs/
+# (and remade when the IP changes). Browsers warn once about it: choose
+# "Advanced" -> "Proceed"; voice works after that.
+# ---------------------------------------------------------------------------
+SCHEME="http"
+SSL_UVICORN=()
+SSL_GUNICORN=()
+if [[ "$HTTPS" == 1 ]]; then
+  command -v openssl >/dev/null || die "openssl is needed for --https"
+  CERT_DIR="certs"
+  mkdir -p "$CERT_DIR"
+  ips="$( (ifconfig 2>/dev/null || ip -4 addr 2>/dev/null) | awk '/inet / {sub("addr:", "", $2); print $2}' | grep -v '^127\.' || true)"
+  san="DNS:localhost,IP:127.0.0.1"
+  for ip in $ips; do san="$san,IP:$ip"; done
+  if [[ ! -f "$CERT_DIR/server.crt" || "$(cat "$CERT_DIR/san.txt" 2>/dev/null || true)" != "$san" ]]; then
+    info "Creating a self-signed HTTPS certificate for: ${san//,/ }"
+    openssl req -x509 -newkey rsa:2048 -nodes -days 825 -sha256 \
+      -keyout "$CERT_DIR/server.key" -out "$CERT_DIR/server.crt" \
+      -subj "/CN=CodeOracle local" -addext "subjectAltName=$san" >/dev/null 2>&1 \
+      || die "Could not create the certificate (needs OpenSSL 1.1.1+ or LibreSSL 3.1+)"
+    chmod 600 "$CERT_DIR/server.key"
+    echo "$san" > "$CERT_DIR/san.txt"
+  fi
+  SCHEME="https"
+  SSL_UVICORN=(--ssl-certfile "$CERT_DIR/server.crt" --ssl-keyfile "$CERT_DIR/server.key")
+  SSL_GUNICORN=(--certfile "$CERT_DIR/server.crt" --keyfile "$CERT_DIR/server.key")
+  for ip in $ips; do info "Students on the network: https://${ip}:${API_PORT}"; done
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Dev mode: single process, no Redis needed
 # ---------------------------------------------------------------------------
 if [[ "$MODE" == "dev" ]]; then
-  info "Starting dev server on http://localhost:${API_PORT}"
+  info "Starting dev server on ${SCHEME}://localhost:${API_PORT}"
   # uvicorn directly (not `python main.py`): main.py reloads .env with override,
   # which would undo a port change made above.
-  exec python -m uvicorn main:app --host 0.0.0.0 --port "$API_PORT" --reload
+  exec python -m uvicorn main:app --host 0.0.0.0 --port "$API_PORT" --reload ${SSL_UVICORN[@]+"${SSL_UVICORN[@]}"}
 fi
 
 # ---------------------------------------------------------------------------
@@ -156,11 +197,12 @@ fi
 export API_RELOAD=false
 # macOS: forked gunicorn workers otherwise abort in the Objective-C runtime when one is restarted.
 [[ "$(uname)" == "Darwin" ]] && export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-info "Starting server on http://localhost:${API_PORT}  (Ctrl+C to stop)"
+info "Starting server on ${SCHEME}://localhost:${API_PORT}  (Ctrl+C to stop)"
 exec python -m gunicorn main:app \
   -k uvicorn.workers.UvicornWorker \
   -w "$WORKERS" \
   --bind "0.0.0.0:${API_PORT}" \
+  ${SSL_GUNICORN[@]+"${SSL_GUNICORN[@]}"} \
   --timeout 120 \
   --graceful-timeout 30 \
   --access-logfile - \

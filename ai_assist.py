@@ -456,6 +456,9 @@ class AgentTurn:
 
     async def _tool(self, name: str, args: Dict[str, Any]) -> Tuple[str, Optional[Dict[str, Any]]]:
         """Return (result text for the model, optional event for the client)."""
+        allowed = _MODE_TOOLS[self.mode] + (["install_package"] if self._installable() else [])
+        if name not in allowed:  # e.g. Plan/Ask are read-only even if the model asks for an edit
+            return f"{name} is not available in {self.mode} mode. Nothing was changed.", None
         fn = args.get("filename") or ""
         if name == "list_files":
             return "\n".join(f"{n} ({len(c.splitlines())} lines)" for n, c in self.ws.items()) or "(no files)", None

@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import math
+import urllib.parse
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -308,42 +309,59 @@ def _submission_code_str(row: Dict[str, Any]) -> str:
     return str(raw)
 
 
-def _final_code_per_problem(meta: Dict[str, Any], num_problems: int) -> List[Optional[str]]:
-    """
-    Latest code per problem from session_metadata.per_problem_submissions (by timestamp),
-    then override with rows marked final_submit=True. Falls back to submitted_code for
-    single-problem sessions when no per-row code exists.
-    """
-    rows = _firebase_to_list(meta.get("per_problem_submissions"))
-    best: Dict[int, Tuple[Optional[datetime], str]] = {}
+_LANG_EXT = {"python": "py", "javascript": "js", "c": "c", "cpp": "cpp", "java": "java"}
 
+
+def _row_files(row: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Workspace files of a per_problem_submissions row ([{filename, content}]); [] if none were saved."""
+    out: List[Dict[str, str]] = []
+    for f in _firebase_to_list(row.get("files")):
+        if isinstance(f, dict) and f.get("filename"):
+            out.append({"filename": str(f["filename"]), "content": str(f.get("content") or "")})
+    return out
+
+
+def _final_files_per_problem(meta: Dict[str, Any], num_problems: int) -> List[Optional[List[Dict[str, str]]]]:
+    """
+    Final workspace files per problem (every file, e.g. all the files an agent changed).
+    Latest session_metadata.per_problem_submissions row per problem (by timestamp), overridden by
+    rows marked final_submit=True. Rows from before files were saved give one file with their code;
+    single-problem sessions fall back to submitted_files / submitted_code.
+    """
+    lang = str(meta.get("programming_language") or "").strip().lower()
+    default_name = f"solution.{_LANG_EXT.get(lang, 'txt')}"
+
+    def files_of(row: Dict[str, Any]) -> Optional[List[Dict[str, str]]]:
+        files = _row_files(row)
+        if any(f["content"].strip() for f in files):
+            return files
+        code = _submission_code_str(row)
+        return [{"filename": default_name, "content": code}] if code.strip() else None
+
+    rows = _firebase_to_list(meta.get("per_problem_submissions"))
+    best: Dict[int, Tuple[Optional[datetime], Dict[str, Any]]] = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
         pi = _int_pi(row.get("problem_index"))
         if pi is None or pi < 0 or pi >= num_problems:
             continue
-        code = _submission_code_str(row)
         ts = _parse_iso(row.get("timestamp"))
         tzu = _utc_for_delta(ts) if ts else None
         cur = best.get(pi)
         if cur is None:
-            best[pi] = (tzu, code)
+            best[pi] = (tzu, row)
             continue
-        cur_t, _cur_c = cur
+        cur_t = cur[0]
         if tzu is None:
             if cur_t is None:
-                best[pi] = (None, code)
+                best[pi] = (None, row)
         elif cur_t is None or tzu >= cur_t:
-            best[pi] = (tzu, code)
+            best[pi] = (tzu, row)
 
-    out: List[Optional[str]] = []
-    for i in range(num_problems):
-        if i in best:
-            c = best[i][1]
-            out.append(c if c.strip() else None)
-        else:
-            out.append(None)
+    out: List[Optional[List[Dict[str, str]]]] = [
+        files_of(best[i][1]) if i in best else None for i in range(num_problems)
+    ]
 
     for row in rows:
         if not isinstance(row, dict) or row.get("final_submit") is not True:
@@ -351,16 +369,23 @@ def _final_code_per_problem(meta: Dict[str, Any], num_problems: int) -> List[Opt
         pi = _int_pi(row.get("problem_index"))
         if pi is None or pi < 0 or pi >= num_problems:
             continue
-        code = _submission_code_str(row)
-        if code.strip():
-            out[pi] = code
+        files = files_of(row)
+        if files:
+            out[pi] = files
 
-    sub = meta.get("submitted_code")
-    if isinstance(sub, str) and sub.strip():
-        if num_problems == 1 and (len(out) < 1 or out[0] is None or not str(out[0]).strip()):
-            out[0] = sub
+    if num_problems == 1 and not out[0]:
+        out[0] = files_of({"files": meta.get("submitted_files"), "code": meta.get("submitted_code")})
 
     return out
+
+
+def _files_as_text(files: Optional[List[Dict[str, str]]]) -> str:
+    """One text block for a problem's files; a header line names each file when there are several."""
+    if not files:
+        return ""
+    if len(files) == 1:
+        return files[0]["content"]
+    return "\n\n".join(f"# ===== {f['filename']} =====\n{f['content']}" for f in files)
 
 
 _DIAGRAM_TOOL_NAMES = {"canvas": "Canvas", "boxes": "Boxes & arrows", "mermaid": "Mermaid", "upload": "Uploaded image"}
@@ -485,6 +510,19 @@ def _qa_from_periodic_occurrence(occ: Dict[str, Any]) -> List[Dict[str, str]]:
     return out
 
 
+def _periodic_slot_key(occ: Dict[str, Any]) -> Tuple[int, int]:
+    """(problem_index, occurrence_number) of one periodic summary row; -1 when the problem is unknown."""
+    pi = _int_pi(occ.get("problem_index"))
+    raw_num = occ.get("occurrence_number")
+    if raw_num is None:
+        raw_num = occ.get("occurrence")
+    try:
+        ni = int(raw_num) if raw_num is not None else 0
+    except (TypeError, ValueError):
+        ni = 0
+    return (-1 if pi is None else pi, ni)
+
+
 def _summarize_survey_payload(user_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Normalize pre/post/periodic survey Q&A for instructor JSON and UI.
@@ -509,8 +547,13 @@ def _summarize_survey_payload(user_data: Dict[str, Any]) -> Dict[str, Any]:
             num_int = int(raw_num) if raw_num is not None else 0
         except (TypeError, ValueError):
             num_int = 0
-        periodic_rows.append({"occurrence_number": num_int, "qa": _qa_from_periodic_occurrence(occ)})
-    periodic_rows.sort(key=lambda x: int(x.get("occurrence_number") or 0))
+        row: Dict[str, Any] = {"occurrence_number": num_int, "qa": _qa_from_periodic_occurrence(occ)}
+        pi = _int_pi(occ.get("problem_index"))
+        if pi is not None:
+            row["problem_index"] = pi
+        periodic_rows.append(row)
+    # Occurrence numbers restart on every problem: order by problem, then occurrence (stable)
+    periodic_rows.sort(key=_periodic_slot_key)
 
     out: Dict[str, Any] = {}
     if pre_qa:
@@ -784,7 +827,7 @@ def derive_session_metrics(
         if cnt > 0:
             avg_suggestion_time_seconds_by_pi[pi] = (total_ms / 1000.0) / cnt
 
-    final_code_per_problem = _final_code_per_problem(meta, num_problems)
+    final_files_per_problem = _final_files_per_problem(meta, num_problems)
     programming_language = str(meta.get("programming_language") or "").strip()
 
     survey_summary = _summarize_survey_payload(user_data)
@@ -802,7 +845,8 @@ def derive_session_metrics(
         "completed_problem": completed_problem[:num_problems] if num_problems else [False],
         "total_time_seconds": total_time_seconds,
         "focus_time_seconds": focus_time_seconds,
-        "final_code_per_problem": final_code_per_problem,
+        "final_code_per_problem": [_files_as_text(f) or None for f in final_files_per_problem],
+        "final_files_per_problem": final_files_per_problem,
         "programming_language": programming_language,
         "time_per_problem_seconds": time_per_problem_seconds,
         "ai_generations_total": ai_gen_total,
@@ -1626,6 +1670,8 @@ def aggregate_quiz_analytics(
         completed_prob = d.get("completed_problem") or [False] * n
         _raw_fc = d.get("final_code_per_problem") or []
         final_codes = [_raw_fc[i] if i < len(_raw_fc) else None for i in range(n)]
+        _raw_ff = d.get("final_files_per_problem") or []
+        final_files = [_raw_ff[i] if i < len(_raw_ff) else None for i in range(n)]
 
         per_session_rows.append(
             {
@@ -1658,6 +1704,7 @@ def aggregate_quiz_analytics(
                 "paste_attempt_total": int(d.get("paste_attempt_total") or 0),
                 "completed_problem": [bool(x) for x in completed_prob[:n]],
                 "final_code_per_problem": final_codes,
+                "final_files_per_problem": final_files,
                 "programming_language": d.get("programming_language") or "",
                 "survey_summary": d.get("survey_summary") or {},
             }
@@ -1795,8 +1842,8 @@ def _checkpoint_session_to_user_data(checkpoint: Dict[str, Any]) -> Optional[Dic
         occs: Dict[str, Any] = {}
         for idx, ps in enumerate(sess["periodic_surveys"]):
             if isinstance(ps, dict):
-                key = f"occurrence_{ps.get('occurrence', idx + 1)}"
-                occs[key] = ps
+                # Occurrence numbers restart per problem; index keeps every round
+                occs[f"{idx + 1:03d}_occ{ps.get('occurrence', idx + 1)}"] = ps
         if occs:
             user_data["periodic_surveys"] = {"metadata": {}, "occurrences": occs}
 
@@ -1873,7 +1920,44 @@ def collect_quiz_sessions_from_firebase(db, quiz_id: str) -> List[Dict[str, Any]
         if ud is not None:
             _append_payload(ud)
 
+    _merge_logged_periodic_surveys(db, out)
     return out
+
+
+def _merge_logged_periodic_surveys(db, payloads: List[Dict[str, Any]]) -> None:
+    """Each recurrent survey round is also pushed to sessions/{id}/periodic_surveys when it is submitted.
+    Final submits made before that list was used kept only the last problem's rounds, so take the
+    pushed list whenever it holds more rounds than the payload."""
+    sids = []
+    for ud in payloads:
+        meta = ud.get("session_metadata")
+        sid = meta.get("session_id") if isinstance(meta, dict) else None
+        sids.append(sid if isinstance(sid, str) and sid else None)
+
+    def _fetch(sid: Optional[str]) -> Any:
+        if not sid:
+            return None
+        try:
+            return db.reference(f"sessions/{sid}/periodic_surveys").get()
+        except Exception as e:
+            logger.warning("periodic_surveys fetch failed for %s: %s", sid, e)
+            return None
+
+    with ThreadPoolExecutor(max_workers=_MIRROR_FETCH_WORKERS) as pool:
+        logged_lists = list(pool.map(_fetch, sids))
+
+    for ud, logged in zip(payloads, logged_lists):
+        if isinstance(logged, dict):
+            rounds = [logged[k] for k in sorted(logged) if isinstance(logged[k], dict)]  # push ids sort by time
+        else:
+            rounds = [x for x in _firebase_to_list(logged) if isinstance(x, dict)]
+        if len(rounds) <= len(_periodic_occurrence_dicts(ud)):
+            continue
+        prev = ud.get("periodic_surveys")
+        ud["periodic_surveys"] = {
+            "metadata": (prev.get("metadata") if isinstance(prev, dict) else None) or {},
+            "occurrences": {f"{i + 1:03d}_occ{r.get('occurrence', i + 1)}": r for i, r in enumerate(rounds)},
+        }
 
 
 def validate_analytics_user_id(raw: Optional[str]) -> str:
@@ -1982,10 +2066,13 @@ def delete_users_data_for_quiz(db, quiz_id: str, user_ids: List[str]) -> Dict[st
     return {"deleted_paths": deleted_paths, "deleted_count": len(deleted_paths), "sessions_deleted_by_user": by_user}
 
 
-SurveySlot = Tuple[str, Optional[int], int]  # (pre|post|periodic, occurrence or None, qa_index)
+# (pre|post|periodic, (problem_index, occurrence) or None, qa_index)
+SurveySlot = Tuple[str, Optional[Tuple[int, int]], int]
 
 
-def _get_qa_pair_at(ss: Dict[str, Any], kind: str, occ: Optional[int], idx: int) -> Optional[Dict[str, Any]]:
+def _get_qa_pair_at(
+    ss: Dict[str, Any], kind: str, occ: Optional[Tuple[int, int]], idx: int
+) -> Optional[Dict[str, Any]]:
     """Return the Q/A dict at a fixed slot (pre/post list index or periodic occurrence + index)."""
     if kind == "pre":
         pq = (ss.get("pre") or {}).get("qa") or []
@@ -2001,14 +2088,7 @@ def _get_qa_pair_at(ss: Dict[str, Any], kind: str, occ: Optional[int], idx: int)
         for o in (ss.get("periodic") or {}).get("occurrences") or []:
             if not isinstance(o, dict):
                 continue
-            raw_num = o.get("occurrence_number")
-            if raw_num is None:
-                raw_num = o.get("occurrence")
-            try:
-                ni = int(raw_num) if raw_num is not None else 0
-            except (TypeError, ValueError):
-                ni = 0
-            if occ is not None and ni != occ:
+            if occ is not None and _periodic_slot_key(o) != occ:
                 continue
             qa = o.get("qa") or []
             if isinstance(qa, list) and 0 <= idx < len(qa) and isinstance(qa[idx], dict):
@@ -2017,8 +2097,16 @@ def _get_qa_pair_at(ss: Dict[str, Any], kind: str, occ: Optional[int], idx: int)
     return None
 
 
-def _question_text_for_slot(per_session: List[Dict[str, Any]], kind: str, occ: Optional[int], idx: int) -> str:
+def _periodic_slot_label(occ: Optional[Tuple[int, int]]) -> str:
+    pi, ni = occ if occ is not None else (-1, 0)
+    return (f"P{pi + 1} · " if pi >= 0 else "") + f"Recurrent #{ni}"
+
+
+def _question_text_for_slot(
+    per_session: List[Dict[str, Any]], kind: str, occ: Optional[Tuple[int, int]], idx: int
+) -> str:
     """Column title = survey question text from the first session that has it."""
+    prefix = f"{_periodic_slot_label(occ)} · " if kind == "periodic" else ""
     for row in per_session:
         ss = row.get("survey_summary")
         if not isinstance(ss, dict):
@@ -2027,12 +2115,12 @@ def _question_text_for_slot(per_session: List[Dict[str, Any]], kind: str, occ: O
         if isinstance(pair, dict):
             q = str(pair.get("q") or "").strip()
             if q:
-                return q
+                return prefix + q
     if kind == "pre":
         return f"Pre-survey (question {idx + 1})"
     if kind == "post":
         return f"Post-survey (question {idx + 1})"
-    return f"Periodic (occ. {occ}) (question {idx + 1})"
+    return f"{prefix}(question {idx + 1})"
 
 
 def _dedupe_csv_headers(headers: List[str]) -> List[str]:
@@ -2054,7 +2142,7 @@ def _survey_csv_layout(per_session: List[Dict[str, Any]]) -> Tuple[List[str], Li
     """Survey columns: header string is the question; rows contain answers only."""
     max_pre = 0
     max_post = 0
-    occ_max: Dict[int, int] = {}
+    occ_max: Dict[Tuple[int, int], int] = {}
 
     for row in per_session:
         ss = row.get("survey_summary")
@@ -2074,16 +2162,10 @@ def _survey_csv_layout(per_session: List[Dict[str, Any]]) -> Tuple[List[str], Li
         for occ in occs:
             if not isinstance(occ, dict):
                 continue
-            raw_num = occ.get("occurrence_number")
-            if raw_num is None:
-                raw_num = occ.get("occurrence")
-            try:
-                ni = int(raw_num) if raw_num is not None else 0
-            except (TypeError, ValueError):
-                ni = 0
+            slot = _periodic_slot_key(occ)
             _occ_qa = occ.get("qa")
             qa: List[Any] = _occ_qa if isinstance(_occ_qa, list) else []
-            occ_max[ni] = max(occ_max.get(ni, 0), len(qa))
+            occ_max[slot] = max(occ_max.get(slot, 0), len(qa))
 
     specs: List[SurveySlot] = []
     for i in range(max_pre):
@@ -2100,16 +2182,30 @@ def _survey_csv_layout(per_session: List[Dict[str, Any]]) -> Tuple[List[str], Li
     return headers, specs
 
 
-def _survey_csv_answers_for_row(survey_summary: Any, specs: List[SurveySlot]) -> List[str]:
-    """One cell per column: answer text only (question is in the header row)."""
-    ss = survey_summary if isinstance(survey_summary, dict) else {}
+def _diagram_url(base_url: str, quiz_id: str, session_id: str, diagram_id: str) -> str:
+    """Instructor link to the image of a diagram answer (opens while logged in as the quiz owner)."""
+    q = urllib.parse.urlencode({"session_id": session_id, "diagram_id": diagram_id})
+    return f"{base_url.rstrip('/')}/instructor/quiz/{urllib.parse.quote(quiz_id)}/diagram?{q}"
+
+
+def _survey_csv_answers_for_row(
+    row: Dict[str, Any], specs: List[SurveySlot], base_url: str = ""
+) -> List[str]:
+    """One cell per column: answer text only (question is in the header row).
+    Diagram answers also get a link to the diagram image."""
+    ss = row.get("survey_summary") if isinstance(row.get("survey_summary"), dict) else {}
     out: List[str] = []
     for kind, occ, idx in specs:
         pair = _get_qa_pair_at(ss, kind, occ, idx)
-        if isinstance(pair, dict):
-            out.append(str(pair.get("a") or "").strip())
-        else:
+        if not isinstance(pair, dict):
             out.append("")
+            continue
+        text = str(pair.get("a") or "").strip()
+        diagram = pair.get("diagram")
+        if isinstance(diagram, dict) and diagram.get("id") and row.get("quiz_id") and row.get("session_id"):
+            url = _diagram_url(base_url, str(row["quiz_id"]), str(row["session_id"]), str(diagram["id"]))
+            text = f"{text}\n{url}" if text else url
+        out.append(text)
     return out
 
 
@@ -2135,10 +2231,13 @@ def _csv_int_cell(v: Any, default: int = 0) -> int:
         return default
 
 
-def export_per_session_csv(problem_labels: List[str], per_session: List[Dict[str, Any]]) -> str:
+def export_per_session_csv(
+    problem_labels: List[str], per_session: List[Dict[str, Any]], base_url: str = ""
+) -> str:
     """Flatten ``per_session`` rows to CSV (UTF-8, Excel-friendly).
 
     Survey columns use the **question text as the header**; each row cell is the **answer** only.
+    Each problem's submitted code gets its own column; diagram answers carry a link to the image.
     """
     n = len(problem_labels) if problem_labels else 0
     if n == 0 and per_session:
@@ -2191,6 +2290,7 @@ def export_per_session_csv(problem_labels: List[str], per_session: List[Dict[str
                 f"{lab}_tabs",
                 f"{lab}_paste",
                 f"{lab}_done",
+                f"{lab}_submitted_code",
             ]
         )
     header.extend(survey_headers)
@@ -2247,9 +2347,10 @@ def export_per_session_csv(problem_labels: List[str], per_session: List[Dict[str
                     _csv_int_cell(_pv("per_problem_tab_switches", i), 0),
                     _csv_int_cell(_pv("per_problem_paste_attempts", i), 0),
                     done_s,
+                    _pv("final_code_per_problem", i) or "",
                 ]
             )
-        out.extend(_survey_csv_answers_for_row(row.get("survey_summary"), survey_specs))
+        out.extend(_survey_csv_answers_for_row(row, survey_specs, base_url))
         w.writerow(out)
 
     return buf.getvalue()

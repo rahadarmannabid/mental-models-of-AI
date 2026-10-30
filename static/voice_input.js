@@ -7,7 +7,8 @@
  * settles it. The participant can then edit it before submitting.
  * Audio never leaves the device and is never stored: it is discarded as soon as it is transcribed.
  *
- *   VoiceInput.attach(textarea)   adds the button below a textarea (no-op if the browser can't do it)
+ *   VoiceInput.attach(textarea)   adds the button below a textarea (if the browser can't record, e.g. on a
+ *                                 plain http:// page, the button explains why when clicked)
  *
  * Each transcription fires a "voiceinput" event on the textarea, detail:
  *   {recording_ms, speech_ms, transcribe_ms, chars, live_passes}   (pages may log it; no audio or text included)
@@ -187,8 +188,17 @@
         if (done) textarea.focus();
     }
 
+    // Why voice can't run here (the button is still shown, and says this when clicked); '' = it can
+    function unsupportedReason() {
+        if (supported) return '';
+        if (!window.isSecureContext) {
+            return 'Voice answers need a secure page: open the site with https:// (or on localhost). Please type your answer.';
+        }
+        return 'This browser cannot record voice answers (try Chrome, Edge or Safari). Please type your answer.';
+    }
+
     function attach(textarea) {
-        if (!supported || !textarea || textarea.dataset.voiceInput) return;
+        if (!textarea || textarea.dataset.voiceInput) return;
         textarea.dataset.voiceInput = '1';
         injectStyles();
 
@@ -354,6 +364,7 @@
 
         var control = { stop: stop };
         btn.addEventListener('click', function () {
+            if (!supported) { setStatus(unsupportedReason(), true); return; }
             if (starting) return;
             if (recording) stop();
             else start();

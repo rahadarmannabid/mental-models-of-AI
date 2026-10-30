@@ -4,6 +4,7 @@ Mounted as a sub-router in main.py at prefix /instructor.
 """
 
 import asyncio
+import io
 import os
 import shutil
 import copy
@@ -20,6 +21,7 @@ import logging
 import re
 import secrets
 import uuid
+import zipfile
 from urllib.parse import quote
 from pathlib import Path
 
@@ -1270,6 +1272,77 @@ async def quiz_diagram_image(request: Request, quiz_id: str, session_id: str, di
     return Response(content=data, media_type=media, headers={"Cache-Control": "private, max-age=300"})
 
 
+def _zip_slug(text: str, limit: int = 40) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", (text or "").strip()).strip("_")[:limit] or "x"
+
+
+def _build_final_code_zip(row: dict, labels: List[str], problem_index: Optional[int]) -> Optional[bytes]:
+    """Zip of a student's final files: one problem's files at the top level, or every problem in its own folder."""
+    files_by_problem = row.get("final_files_per_problem") or []
+    indices = [problem_index] if problem_index is not None else list(range(len(files_by_problem)))
+    buf = io.BytesIO()
+    added = 0
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i in indices:
+            files = files_by_problem[i] if 0 <= i < len(files_by_problem) else None
+            folder = "" if problem_index is not None else (
+                f"P{i + 1}_{_zip_slug(labels[i]) if i < len(labels) else 'problem'}/")
+            for f in files or []:
+                zf.writestr(folder + _zip_slug(str(f.get("filename") or "file"), 64), str(f.get("content") or ""))
+                added += 1
+    return buf.getvalue() if added else None
+
+
+@router.get("/quiz/{quiz_id}/final-code-zip")
+async def quiz_final_code_zip(
+    request: Request,
+    quiz_id: str,
+    session_id: str = Query(..., description="Student session id"),
+    problem_index: Optional[int] = Query(None, description="0-based problem; omit for all problems in one zip"),
+):
+    """Download a student's final code files as a zip (all files of a problem, e.g. every file the agent changed)."""
+    email = _require_instructor(request)
+    if not email:
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
+    fb = _get_firebase()
+    if not fb:
+        return JSONResponse({"error": "Database unavailable"}, status_code=503)
+
+    from firebase_admin import db
+
+    try:
+        quiz = fb_dict(db.reference(f"quizzes/{quiz_id}").get())
+        if not quiz:
+            return JSONResponse({"error": "Quiz not found"}, status_code=404)
+        if quiz.get("created_by") != email:
+            return JSONResponse({"error": "Not authorised"}, status_code=403)
+
+        quiz = _normalize_quiz_data(quiz)
+        labels = _quiz_problem_labels(quiz)
+        data, _hit = await asyncio.to_thread(
+            _load_analytics_payload_for_request, db, quiz_id, quiz, labels, bypass_cache=False
+        )
+        row = next((r for r in data.get("per_session") or [] if r.get("session_id") == session_id), None)
+        if row is None:
+            return JSONResponse({"error": "Session not found"}, status_code=404)
+        if problem_index is not None and not 0 <= problem_index < max(1, len(labels)):
+            return JSONResponse({"error": "Invalid problem"}, status_code=400)
+
+        blob = _build_final_code_zip(row, labels, problem_index)
+        if blob is None:
+            return JSONResponse({"error": "No code saved for this problem"}, status_code=404)
+        part = f"P{problem_index + 1}" if problem_index is not None else "all"
+        fname = f"{_zip_slug(str(row.get('user_id') or 'student'))}-{part}-final-code.zip"
+        return Response(
+            content=blob,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{fname}"', "Cache-Control": "no-store"},
+        )
+    except Exception as e:
+        logger.exception("quiz_final_code_zip failed for quiz_id=%s", quiz_id)
+        return JSONResponse({"error": f"Server error: {e!s}"}, status_code=500)
+
+
 @router.post("/quiz/{quiz_id}/analytics-delete-user")
 async def quiz_analytics_delete_user(
     request: Request, quiz_id: str, body: Optional[dict] = Body(default=None)
@@ -1322,7 +1395,7 @@ async def quiz_analytics_export(
     fmt: str = "csv",
     refresh: int = Query(0, description="Set to 1 to bypass server aggregate cache"),
 ):
-    """Download per-session CSV (flattened) or full aggregate JSON for this quiz."""
+    """Download the per-session CSV (flattened) for this quiz."""
     email = _require_instructor(request)
     if not email:
         return JSONResponse({"error": "Not authenticated"}, status_code=401)
@@ -1333,9 +1406,8 @@ async def quiz_analytics_export(
 
     from firebase_admin import db
 
-    kind = (fmt or "csv").strip().lower()
-    if kind not in ("csv", "json"):
-        return JSONResponse({"error": "fmt must be csv or json"}, status_code=400)
+    if (fmt or "csv").strip().lower() != "csv":
+        return JSONResponse({"error": "fmt must be csv"}, status_code=400)
 
     try:
         quiz = fb_dict(db.reference(f"quizzes/{quiz_id}").get())
@@ -1352,17 +1424,7 @@ async def quiz_analytics_export(
         )
 
         slug = _safe_quiz_export_slug(quiz_id)
-        if kind == "json":
-            blob = json.dumps(data, ensure_ascii=False, indent=2)
-            h = dict(_ANALYTICS_JSON_NO_CACHE)
-            h["Content-Disposition"] = f'attachment; filename="{slug}-analytics.json"'
-            return Response(
-                content=blob.encode("utf-8"),
-                media_type="application/json; charset=utf-8",
-                headers=h,
-            )
-
-        csv_text = export_per_session_csv(labels, data.get("per_session") or [])
+        csv_text = export_per_session_csv(labels, data.get("per_session") or [], str(request.base_url))
         bom = "\ufeff"
         h = dict(_ANALYTICS_JSON_NO_CACHE)
         h["Content-Disposition"] = f'attachment; filename="{slug}-analytics-sessions.csv"'

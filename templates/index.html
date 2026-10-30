@@ -223,6 +223,13 @@
         .problem-panel__body[hidden] {
             display: none !important;
         }
+        /* The task description can't be selected or copied (students could paste it into an outside AI) */
+        #problemPanelBody,
+        #problemPanelBody * {
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+        }
         .problem-panel__ai-history-embed .ai-history-section {
             margin: 0;
             padding: 0;
@@ -3306,6 +3313,7 @@ var ALLOWED_ACTIVITY_TYPES = {
     code_editing_delete: true,
     code_editing_modify: true,
     paste_attempt: true,
+    description_copy_attempt: true,
     ai_analysis_trigger: true,
     ai_analysis_complete: true,
     copilot_popup_cleared_for_analysis: true,
@@ -6614,6 +6622,36 @@ function refreshProblemPanelAiHistoryContent() {
     }
 }
 
+// No copying from the task description: block copy/cut, the context menu, dragging text out,
+// and selection (CSS user-select covers most of it; these catch keyboard and menu paths).
+function blockDescriptionCopy(panel) {
+    function block(e) {
+        e.preventDefault();
+        if (e.type === 'copy' || e.type === 'cut') {
+            if (e.clipboardData) e.clipboardData.setData('text/plain', '');
+            logActivity('description_copy_attempt', { method: e.type });
+            addTerminalOutput('Copying from the task description is disabled.', 'warning');
+        }
+    }
+    ['copy', 'cut', 'contextmenu', 'dragstart', 'selectstart'].forEach(function (type) {
+        panel.addEventListener(type, block, true);
+    });
+    // Ctrl/Cmd+A or C while the description has focus: don't select or copy the page
+    panel.addEventListener('keydown', function (e) {
+        var k = (e.key || '').toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && (k === 'a' || k === 'c' || k === 'x')) block(e);
+    }, true);
+    // A page-wide Ctrl/Cmd+A selection can still include the description: copy nothing from it
+    document.addEventListener('copy', function (e) {
+        if (panel.contains(e.target)) return;  // handled by the panel's own listener
+        var sel = window.getSelection();
+        if (!sel || sel.isCollapsed) return;
+        for (var i = 0; i < sel.rangeCount; i++) {
+            if (sel.getRangeAt(i).intersectsNode(panel)) { block(e); return; }
+        }
+    }, true);
+}
+
 function initProblemPanelTabs() {
     if (_problemPanelTabsInitialized) return;
     var tabProblem = document.getElementById('problemTabProblem');
@@ -6622,6 +6660,7 @@ function initProblemPanelTabs() {
     var panelAi = document.getElementById('problemPanelAiHistory');
     if (!tabProblem || !tabAi || !panelProblem || !panelAi) return;
     _problemPanelTabsInitialized = true;
+    blockDescriptionCopy(panelProblem);
 
     function selectTab(which) {
         var isProblem = which === 'problem';
@@ -7067,6 +7106,11 @@ async function checkAndShowPostSurvey() {
                 authData.problemDescription = nextData.problem_description;
                 authData.starterCode = nextData.starter_code;
                 authData.starterFiles = nextData.starter_files;
+                // The saved draft belongs to the problem just finished: drop it so the next
+                // problem opens with its own starter files (the editor prefers a draft over them).
+                authData.editorDraftCode = null;
+                authData.editorDraftFiles = null;
+                authData.editorDraftActiveFile = null;
                 authData.hasPreSurvey = nextData.has_pre_survey || false;
                 authData.hasPostSurvey = nextData.has_post_survey || false;
                 authData.periodicSurveyEnabled = nextData.periodic_survey_enabled === true;

@@ -816,6 +816,7 @@ class SessionLog(BaseModel):
 
 class SurveyResponse(BaseModel):
     question: str
+    question_id: Optional[str] = None
     response: Union[int, str, float, bool, List[Any], Dict[str, Any], None]  # Likert int, text, checkbox list, grid/diagram object
 
 class SurveySubmission(BaseModel):
@@ -1406,6 +1407,14 @@ def _sanitize_firebase_key_segment(s: str) -> str:
     """RTDB keys: avoid . # $ [ ] / and long paths."""
     t = "".join(c if (c.isalnum() or c in "-_") else "_" for c in (s or ""))
     return (t or "user")[:96]
+
+
+def periodic_occurrence_key(survey: Dict[str, Any], idx: int) -> str:
+    """Firebase key for one recurrent survey round. Occurrence numbers restart on every problem,
+    so the key carries the submission order and problem to stay unique (e.g. 003_p2_occ1)."""
+    pi = survey.get("problem_index")
+    part = f"p{int(pi) + 1}_" if isinstance(pi, int) else ""
+    return f"{idx + 1:03d}_{part}occ{survey.get('occurrence') or idx + 1}"
 
 
 def append_periodic_survey_to_firebase(session_id: str, survey_data: Dict[str, Any]) -> bool:
@@ -3380,7 +3389,8 @@ async def submit_code(request: SubmitRequest):
             # Record final problem code for instructor analytics (next-problem only stores intermediate)
             if session_log.quiz_id and session_log.total_problems >= 1:
                 session_log.per_problem_submissions.append(
-                    _problem_record(session_log, code, submitted_files, final_submit=True))
+                    _problem_record(session_log, code, submitted_files or _draft_files_for(session_log),
+                                    final_submit=True))
             _merge_client_activity_logs(session_log, request.activity_logs)
         
         detected_language = detect_programming_language(code)
@@ -5611,33 +5621,42 @@ async def save_session_to_firebase(
         
         logger.info(f"  - Periodic survey questions loaded: {len(periodic_survey_questions)}")
         
-        if survey_data and survey_data.get('periodic_surveys'):
-            logger.info(f"  - Processing {len(survey_data.get('periodic_surveys', []))} periodic surveys...")
-            
+        # The server's record holds every recurrent survey of the session (all problems); the
+        # browser's list is cleared when the student moves on to the next problem.
+        periodic_source = session_log.periodic_surveys or (survey_data or {}).get('periodic_surveys') or []
+        if periodic_source:
+            logger.info(f"  - Processing {len(periodic_source)} periodic surveys...")
+
             periodic_surveys_data = [
                 {
-                    'occurrence': survey.get('occurrence', idx + 1),
+                    'occurrence': survey.get('occurrence') or idx + 1,
+                    'problem_index': survey.get('problem_index'),
                     'timestamp': survey.get('timestamp'),
                     'status': survey.get('status', 'completed'),
-                    'triggered_at_analysis_count': survey.get('analysisCount'),
-                    'is_final': survey.get('is_final', False),
-                    'triggered_at_submission': survey.get('triggered_at_submission', False),
-                    
+                    'triggered_at_analysis_count': survey.get('analysisCount', survey.get('analysis_count')),
+                    'is_final': survey.get('is_final', survey.get('survey_type') == 'final'),
+                    'triggered_at_submission': survey.get('triggered_at_submission', survey.get('trigger') == 'submission'),
+                    'trigger': survey.get('trigger'),
+                    'display': survey.get('display'),
+                    'shown_at': survey.get('shown_at'),
+                    'duration_seconds': survey.get('duration_seconds'),
+
                     # STORE THE QUESTIONS that were asked
                     'questions': periodic_survey_questions,
-                    
+
                     # Store responses with context
                     'responses': [
                         {
                             'question': resp.get('question'),
+                            'question_id': resp.get('question_id'),
                             'response': resp.get('response')
-                        } for resp in survey.get('responses', [])
+                        } for resp in survey.get('responses', []) if isinstance(resp, dict)
                     ],
-                    
+
                     # AI history captured when this survey was shown
-                    'ai_history_at_survey_time': survey.get('ai_history_at_survey', {})
+                    'ai_history_at_survey_time': survey.get('ai_history_at_survey') or survey.get('ai_history_context') or {}
                 }
-                for idx, survey in enumerate(survey_data.get('periodic_surveys', []))
+                for idx, survey in enumerate(periodic_source) if isinstance(survey, dict)
             ]
         logs_data = {
             'ai_guesses': {
@@ -5696,21 +5715,26 @@ async def save_session_to_firebase(
             survey_meta = survey_data or {}
             user_data['periodic_surveys'] = {
                 'metadata': {
-                    'total_occurrences': survey_meta.get('total_occurrences', len(periodic_surveys_data)),
+                    'total_occurrences': len(periodic_surveys_data),
                     'survey_interval': survey_meta.get('survey_interval', 4),
                     'questions_asked': periodic_survey_questions  # Store questions for reference
                 },
                 'occurrences': {
-                    f"occurrence_{survey['occurrence']}": {
+                    periodic_occurrence_key(survey, idx): {
                         'occurrence_number': survey['occurrence'],
+                        'problem_index': survey['problem_index'],
                         'timestamp': survey['timestamp'],
                         'triggered_at_analysis_count': survey['triggered_at_analysis_count'],
                         'is_final': survey['is_final'],
                         'triggered_at_submission': survey.get('triggered_at_submission', False),
+                        'trigger': survey['trigger'],
+                        'display': survey['display'],
+                        'shown_at': survey['shown_at'],
+                        'duration_seconds': survey['duration_seconds'],
                         'questions': survey['questions'],
                         'responses': survey['responses'],
                         'ai_history_at_survey_time': survey['ai_history_at_survey_time']
-                    } for survey in periodic_surveys_data
+                    } for idx, survey in enumerate(periodic_surveys_data)
                 }
             }
         user_ref = firebase_db.child(f'{condition_path}/{session_log.assignment_id}/{session_log.user_id}')
@@ -6307,7 +6331,7 @@ async def student_quiz_entry(request: Request, access_code: str):
         except ValueError:
             pass
 
-    allowed_langs = quiz_data.get("allowed_languages", ["python", "javascript", "c", "cpp", "java"])
+    allowed_langs = quiz_student_languages(quiz_data)
     quiz_teaser = quiz_data.get("teaser", "")
     return templates.TemplateResponse("home.html", {
         "request": request,
@@ -6316,6 +6340,23 @@ async def student_quiz_entry(request: Request, access_code: str):
         "access_code": access_code,
         "allowed_languages": allowed_langs,
     })
+
+
+def quiz_student_languages(quiz_data: Dict[str, Any]) -> List[str]:
+    """Languages a student may pick: the allowed ones that have starter code for every problem that ships
+    starter code (otherwise the task text names files the student would not get). All allowed languages
+    if no problem has starter code, or if no language covers them all."""
+    allowed = quiz_data.get("allowed_languages") or ["python", "javascript", "c", "cpp", "java"]
+    with_starter = [
+        {lang for lang, v in (p.get("starter_code") or {}).items() if v}
+        # Legacy single-problem quizzes keep starter_code at the top level
+        for p in quiz_data.get("problems") or [{"starter_code": quiz_data.get("starter_code")}]
+        if isinstance(p, dict) and any((p.get("starter_code") or {}).values())
+    ]
+    if not with_starter:
+        return allowed
+    usable = [lang for lang in allowed if all(lang in langs for langs in with_starter)]
+    return usable or allowed
 
 
 def build_quiz_join_response(
@@ -6476,7 +6517,7 @@ async def student_quiz_join(request: Request):
             pass
 
     # Validate language
-    allowed_langs = quiz_data.get("allowed_languages", ["python", "javascript", "c", "cpp", "java"])
+    allowed_langs = quiz_student_languages(quiz_data)
     if programming_language not in allowed_langs:
         raise HTTPException(status_code=400, detail=f"Language not allowed. Choose from: {allowed_langs}")
 
@@ -6657,6 +6698,8 @@ async def quiz_next_problem(request: Request):
     # Save current problem's code (all workspace files) and time spent
     files = [{"filename": str(f.get("filename", ""))[:64], "content": str(f.get("content", ""))[:100_000]}
              for f in (body.get("files") or [])[:20] if isinstance(f, dict)]
+    # No file list from the browser: keep the problem's last autosaved workspace instead of only `code`
+    files = files or _draft_files_for(session_log) or []
     session_log.per_problem_submissions.append(_problem_record(session_log, code, files))
     session_log.current_problem_started_at = datetime.now(timezone.utc).isoformat()
 
